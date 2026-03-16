@@ -469,7 +469,7 @@ def pulse_raw():
         
         # Fetch all messages with only needed columns and join with size cache for stickers/gifs
         query = '''
-            SELECT m.sender, m.timestamp, m.media_type, m.text_content, m.media_path, c.size 
+            SELECT m.id, m.sender, m.timestamp, m.media_type, m.text_content, m.media_path, c.size 
             FROM messages m
             LEFT JOIN media_sizes_cache c ON m.media_path = c.media_path
             WHERE m.sender IS NOT NULL AND m.sender != ''
@@ -480,11 +480,12 @@ def pulse_raw():
         
         # Pre-clean sender names server-side and build compact records
         messages = []
-        for sender, ts, media_type, text_content, media_path, size in rows:
+        for msg_id, sender, ts, media_type, text_content, media_path, size in rows:
             cleaned = clean_sender_name(sender) if sender else "Unknown"
             if cleaned == 'System':
                 continue
             item = {
+                'i': msg_id,         # id
                 's': cleaned,         # sender (cleaned)
                 't': ts[:19] if ts else None,              # timestamp
                 'm': media_type,      # media_type (can be None)
@@ -743,10 +744,9 @@ def chat_dynamics():
     if not 1 <= icebreaker_gap <= 24: icebreaker_gap = 8
     if not 1 <= ghosting_gap <= 24: ghosting_gap = 4.0
     
-    # 1. We ONLY cache based on exact date boundaries and gaps.
-    # The actual 'senders' filter is applied POST cache-fetch, because calculating
-    # the entire dataset once is way faster than building an infinite amount of dynamic cache lines.
-    cache_key = f"dyn_{start_date}_{end_date}_ice{icebreaker_gap}_ghs{ghosting_gap}"
+    # v10 Caching Strategy
+    master_key = f"master_v10_{start_date}_{end_date}"
+    slider_key = f"dyn_v10_{start_date}_{end_date}_ice{icebreaker_gap}_ghs{ghosting_gap}"
     
     valid_senders = None
     if sender_param and sender_param != 'all':
@@ -756,174 +756,171 @@ def chat_dynamics():
         conn = sqlite3.connect(DB_NAME)
         c = conn.cursor()
         
-        # Check cache
-        c.execute("SELECT cache_value FROM statistics_cache WHERE cache_key = ?", (cache_key,))
+        # 1. Try Slider Cache (Exact match)
+        c.execute("SELECT cache_value FROM statistics_cache WHERE cache_key = ?", (slider_key,))
         row = c.fetchone()
         
         import json
         if row:
             raw_data = json.loads(row[0])
         else:
-            # Complex single-pass query logic
-            base_where = "WHERE sender IS NOT NULL AND sender != '' AND sender != 'System' AND sender NOT LIKE '%System%'"
-            params = []
+            # 2. Try Master Cache (Date match)
+            c.execute("SELECT cache_value FROM statistics_cache WHERE cache_key = ?", (master_key,))
+            m_row = c.fetchone()
             
-            if start_date:
-                base_where += " AND timestamp >= ?"
-                params.append(start_date + " 00:00:00")
-            if end_date:
-                base_where += " AND timestamp <= ?"
-                params.append(end_date + " 23:59:59")
+            analytics = None
+            if m_row:
+                analytics = json.loads(m_row[0])
+            
+            if not analytics:
+                # 3. Cache miss - do the heavy lifting
+                base_where = "WHERE sender IS NOT NULL AND sender != '' AND sender != 'System' AND sender NOT LIKE '%System%'"
+                params = []
                 
-            query = f'''
-                SELECT 
-                    sender, 
-                    timestamp,
-                    text_content,
-                    LAG(sender) OVER (ORDER BY timestamp ASC) as prev_sender,
-                    LAG(timestamp) OVER (ORDER BY timestamp ASC) as prev_timestamp
-                FROM messages 
-                {base_where}
-            '''
-            
-            c.execute(query, params)
-            rows = c.fetchall()
-            
-            from datetime import datetime
-            
-            # Master analytics bins
-            analytics = {}
-            
-            # State for bursting tracking
-            current_burst_sender = None
-            current_burst_len = 0
-            current_burst_start_time = None
-            
-            for s_raw, ts, txt, prev_sender, prev_ts in rows:
-                sender = clean_sender_name(s_raw) if s_raw else "Unknown"
-                if sender == 'System': continue
-                
-                prev_cleaned = clean_sender_name(prev_sender) if prev_sender else None
-                
-                # Init sender bins
-                if sender not in analytics:
-                    analytics[sender] = {
-                        'msgs': 0, 'icebreakers': 0, 'ghosted_records': [], 
-                        'char_lengths': [], 'max_msg': {'len': 0, 'text': '', 'date': ''},
-                        'burst_seqs': [], 'burst_record': {'len': 0, 'date': ''}
-                    }
+                if start_date:
+                    base_where += " AND timestamp >= ?"
+                    params.append(start_date + " 00:00:00")
+                if end_date:
+                    base_where += " AND timestamp <= ?"
+                    params.append(end_date + " 23:59:59")
                     
-                analytics[sender]['msgs'] += 1
+                query = f'''
+                    SELECT 
+                        sender, 
+                        timestamp,
+                        text_content,
+                        LAG(sender) OVER (ORDER BY timestamp ASC) as prev_sender,
+                        LAG(timestamp) OVER (ORDER BY timestamp ASC) as prev_timestamp
+                    FROM messages 
+                    {base_where}
+                '''
                 
-                # Length Analysis
-                if txt and isinstance(txt, str) and txt.strip():
-                    import re
-                    clean_txt = re.sub(r'<[^>]+>', '', txt)
-                    clean_txt = re.sub(r'http\S+|www\.\S+', '', clean_txt).strip()
-                    txt_len = len(clean_txt)
-                    if txt_len > 0:
-                        analytics[sender]['char_lengths'].append(txt_len)
-                        if txt_len > analytics[sender]['max_msg']['len']:
-                            analytics[sender]['max_msg'] = {'len': txt_len, 'text': clean_txt[:25] + ('...' if len(clean_txt) > 25 else ''), 'date': ts}
+                c.execute(query, params)
+                rows = c.fetchall()
                 
-                if prev_ts:
-                    t_curr = datetime.strptime(ts, "%Y-%m-%d %H:%M:%S")
-                    t_prev = datetime.strptime(prev_ts, "%Y-%m-%d %H:%M:%S")
-                    delta_seconds = (t_curr - t_prev).total_seconds()
-                    delta_hours = delta_seconds / 3600.0
-                    delta_mins = delta_seconds / 60.0
+                from datetime import datetime
+                analytics = {}
+                current_burst_sender = None
+                current_burst_len = 0
+                current_burst_start_time = None
+                
+                for s_raw, ts, txt, prev_sender, prev_ts in rows:
+                    sender = clean_sender_name(s_raw) if s_raw else "Unknown"
+                    if sender == 'System': continue
                     
-                    # Icebreaker Analysis
-                    if delta_hours >= icebreaker_gap:
-                        analytics[sender]['icebreakers'] += 1
+                    prev_cleaned = clean_sender_name(prev_sender) if prev_sender else None
+                    
+                    if sender not in analytics:
+                        analytics[sender] = {
+                            'msgs': 0, 'icebreaker_records': [], 'ghosted_records': [], 
+                            'char_lengths': [], 'max_msg': {'len': 0, 'text': '', 'date': ''},
+                            'burst_seqs': [], 'burst_freq': {str(k): 0 for k in range(2, 11)}, 'burst_record': {'len': 0, 'date': ''}
+                        }
                         
-                    # Target gap metrics ONLY on sender change
-                    if sender != prev_cleaned and prev_cleaned is not None:
-                        # Responded Analysis (Ghosting setup)
-                        if current_burst_start_time:
-                            t_prev_burst = datetime.strptime(current_burst_start_time, "%Y-%m-%d %H:%M:%S")
-                            burst_delta_seconds = (t_curr - t_prev_burst).total_seconds()
-                            burst_delta_hours = burst_delta_seconds / 3600.0
-                            burst_delta_mins = burst_delta_seconds / 60.0
-                        else:
-                            burst_delta_hours = delta_hours
-                            burst_delta_mins = delta_mins
-                            
-                        if burst_delta_hours <= ghosting_gap:
-                            analytics[sender]['ghosted_records'].append(burst_delta_mins)
-                
-                # Burst / Double-Texting Analysis
-                if sender == current_burst_sender:
-                    current_burst_len += 1
-                else:
-                    # Burst broken by sender change
-                    if current_burst_sender is not None and current_burst_sender in analytics and current_burst_len > 1:
-                        analytics[current_burst_sender]['burst_seqs'].append(current_burst_len)
-                        if current_burst_len > analytics[current_burst_sender]['burst_record']['len']:
-                            analytics[current_burst_sender]['burst_record'] = {'len': current_burst_len, 'date': current_burst_start_time}
-                            
-                    current_burst_sender = sender
-                    current_burst_len = 1
-                    current_burst_start_time = ts
+                    analytics[sender]['msgs'] += 1
                     
-            # Handle final burst
-            if current_burst_sender is not None and current_burst_sender in analytics and current_burst_len > 1:
-                analytics[current_burst_sender]['burst_seqs'].append(current_burst_len)
-                if current_burst_len > analytics[current_burst_sender]['burst_record']['len']:
-                    analytics[current_burst_sender]['burst_record'] = {'len': current_burst_len, 'date': current_burst_start_time}
-            
-            # Post-process crunching
-            final_data = {}
-            for sender, d in analytics.items():
-                # Ghosting Bucketing
-                ghost_buckets = {'insta': [], 'active': [], 'delayed': [], 'ghosted': []}
-                for mins in d['ghosted_records']:
-                    if mins < 0.5:
-                        ghost_buckets['insta'].append(mins)
-                    elif mins < 5:
-                        ghost_buckets['active'].append(mins)
-                    elif mins < 60:
-                        ghost_buckets['delayed'].append(mins)
+                    # Length Analysis
+                    if txt and isinstance(txt, str) and txt.strip():
+                        import re
+                        clean_txt = re.sub(r'<[^>]+>', '', txt)
+                        clean_txt = re.sub(r'http\S+|www\.\S+', '', clean_txt).strip()
+                        txt_len = len(clean_txt)
+                        if txt_len > 0:
+                            analytics[sender]['char_lengths'].append(txt_len)
+                            if txt_len > analytics[sender]['max_msg']['len']:
+                                analytics[sender]['max_msg'] = {'len': txt_len, 'text': clean_txt[:25] + ('...' if len(clean_txt) > 25 else ''), 'date': ts}
+                    
+                    if prev_ts:
+                        t_curr = datetime.strptime(ts, "%Y-%m-%d %H:%M:%S")
+                        t_prev = datetime.strptime(prev_ts, "%Y-%m-%d %H:%M:%S")
+                        delta_seconds = (t_curr - t_prev).total_seconds()
+                        delta_hours = delta_seconds / 3600.0
+                        
+                        analytics[sender]['icebreaker_records'].append(delta_hours)
+                        if sender != prev_cleaned and prev_cleaned is not None:
+                            analytics[sender]['ghosted_records'].append(delta_seconds)
+                    
+                    # Burst Analysis
+                    if sender == current_burst_sender:
+                        current_burst_len += 1
                     else:
-                        ghost_buckets['ghosted'].append(mins)
+                        if current_burst_sender is not None and current_burst_sender in analytics and current_burst_len > 1:
+                            analytics[current_burst_sender]['burst_seqs'].append(current_burst_len)
+                            freq_key = str(min(current_burst_len, 10))
+                            analytics[current_burst_sender]['burst_freq'][freq_key] += 1
+                            if current_burst_len > analytics[current_burst_sender]['burst_record']['len']:
+                                analytics[current_burst_sender]['burst_record'] = {'len': current_burst_len, 'date': current_burst_start_time}
+                        current_burst_sender = sender
+                        current_burst_len = 1
+                        current_burst_start_time = ts
+                        
+                if current_burst_sender is not None and current_burst_sender in analytics and current_burst_len > 1:
+                    analytics[current_burst_sender]['burst_seqs'].append(current_burst_len)
+                    freq_key = str(min(current_burst_len, 10))
+                    analytics[current_burst_sender]['burst_freq'][freq_key] += 1
+                    if current_burst_len > analytics[current_burst_sender]['burst_record']['len']:
+                        analytics[current_burst_sender]['burst_record'] = {'len': current_burst_len, 'date': current_burst_start_time}
                 
-                ghost_stats = {}
-                total_ghost = len(d['ghosted_records'])
-                for k, v in ghost_buckets.items():
-                    ghost_stats[k] = {
-                        'count': len(v),
-                        'avg_mins': round(sum(v)/len(v), 2) if v else 0,
-                        'pct': round((len(v)/total_ghost)*100, 1) if total_ghost > 0 else 0
+                c.execute("INSERT OR REPLACE INTO statistics_cache (cache_key, cache_value) VALUES (?, ?)", 
+                          (master_key, json.dumps(analytics)))
+                conn.commit()
+
+            # Final Post-processing
+            final_data = {}
+            g_gap_float = float(ghosting_gap)
+            i_gap_int = int(icebreaker_gap)
+            gap_threshold_s = g_gap_float * 3600
+
+            for sender, d in analytics.items():
+                if d['msgs'] == 0: continue
+                
+                ice_count = sum(1 for h in d['icebreaker_records'] if h >= i_gap_int)
+                ghost_stats = {'insta': 0, 'active': 0, 'delayed': 0, 'ghosted': 0, 'extended': 0}
+                
+                for gap_sex in d['ghosted_records']:
+                    if gap_sex < 30: ghost_stats['insta'] += 1
+                    elif gap_sex < 300: ghost_stats['active'] += 1
+                    elif gap_sex < 3600: ghost_stats['delayed'] += 1
+                    else:
+                        if g_gap_float > 1.05:
+                            if gap_sex < gap_threshold_s: ghost_stats['ghosted'] += 1
+                            else: ghost_stats['extended'] += 1
+                        else:
+                            ghost_stats['ghosted'] += 1
+                            
+                total_responses = len(d['ghosted_records'])
+                ghost_stats_with_pct = {}
+                for k, count in ghost_stats.items():
+                    ghost_stats_with_pct[k] = {
+                        'count': count,
+                        'pct': round((count / total_responses) * 100, 2) if total_responses > 0 else 0
                     }
                 
-                avg_len = round(sum(d['char_lengths']) / len(d['char_lengths'])) if d['char_lengths'] else 0
-                
+                avg_len = round((sum(d['char_lengths']) / len(d['char_lengths'])) if d['char_lengths'] else 0, 1)
                 total_burst_msgs = sum(d['burst_seqs'])
                 avg_burst = round(total_burst_msgs / len(d['burst_seqs']), 1) if d['burst_seqs'] else 1.0
                 burst_ratio = round((total_burst_msgs / d['msgs']) * 100, 1) if d['msgs'] > 0 else 0
                 
                 final_data[sender] = {
                     'msgs': d['msgs'],
-                    'icebreakers': d['icebreakers'],
-                    'ghost_stats': ghost_stats,
-                    'total_ghost_records': total_ghost,
+                    'icebreakers': ice_count,
+                    'ghost_stats': ghost_stats_with_pct,
+                    'total_ghost_records': total_responses,
                     'avg_length': avg_len,
                     'max_msg': d['max_msg'],
                     'burst_ratio': burst_ratio,
                     'avg_burst': avg_burst,
-                    'burst_record': d['burst_record']
+                    'burst_record': d['burst_record'],
+                    'burst_freq': d['burst_freq']
                 }
                 
             raw_data = final_data
-            
-            # Cache it
             c.execute("INSERT OR REPLACE INTO statistics_cache (cache_key, cache_value) VALUES (?, ?)", 
-                      (cache_key, json.dumps(raw_data)))
+                      (slider_key, json.dumps(raw_data)))
             conn.commit()
             
         conn.close()
         
-        # Apply sender filtering if requested AFTER cache fetch
         if valid_senders:
             filtered_data = {k: v for k, v in raw_data.items() if k in valid_senders}
         else:

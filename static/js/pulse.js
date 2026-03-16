@@ -160,10 +160,14 @@ function computePulseStats(messages) {
     const emojiPattern = /[\u{1F600}-\u{1F64F}\u{1F300}-\u{1F5FF}\u{1F680}-\u{1F6FF}\u{1F1E0}-\u{1F1FF}\u{2600}-\u{26FF}\u{2700}-\u{27BF}\u{1F900}-\u{1F9FF}\u{1FA70}-\u{1FAFF}]/gu;
     const emojiCounts = {};
     const stopWords = new Set(['that', 'this', 'with', 'from', 'your', 'have', 'they', 'will', 'what', 'there', 'would', 'about', 'which', 'when', 'make', 'like', 'time', 'just', 'know', 'take', 'person', 'into', 'year', 'good', 'some', 'could', 'them', 'other', 'than', 'then', 'look', 'only', 'come', 'over', 'think', 'also', 'back', 'after', 'even', 'want', 'because', 'these', 'give', 'most', 'меня', 'тебя', 'тебе', 'мне', 'что', 'как', 'это', 'все', 'так', 'его', 'только', 'было', 'чтобы', 'если', 'уже', 'или', 'нет', 'еще', 'даже', 'быть', 'когда', 'нас', 'для', 'вот', 'вам', 'мы', 'ты', 'вы', 'он', 'она', 'они', 'оно', 'вас', 'их', 'нам', 'им', 'мной', 'тобой', 'нами', 'вами', 'ими', 'href']);
-    const wordPattern = /\p{L}{4,}/gu;
+    const wordPattern = /\p{L}{2,}/gu; // Reduced from 4 to 2 to support phrases
     let wordCounts = {};
     const stickerCounts = {};
     const gifCounts = {};
+    
+    // Read phrase length ONCE before the loop (performance: avoid DOM reads inside tight loop)
+    const phraseInput = document.getElementById('pulse-phrase-len');
+    const maxNGram = phraseInput ? Math.max(1, Math.min(5, parseInt(phraseInput.value) || 1)) : 1;
 
     // === SINGLE PASS ===
     for (const msg of messages) {
@@ -215,18 +219,91 @@ function computePulseStats(messages) {
                     emojiCounts[e].senders[s] = (emojiCounts[e].senders[s] || 0) + 1;
                 }
             }
+            
             const cleanText = msg.x.toLowerCase().replace(/http\S+|www\.\S+|<.*?>/g, '');
             const foundWords = cleanText.match(wordPattern);
+            
             if (foundWords) {
-                for (const w of foundWords) {
-                    if (stopWords.has(w) || w.length > 20) continue;
-                    if (!wordCounts[w]) wordCounts[w] = { total: 0, senders: {} };
-                    wordCounts[w].total++;
-                    wordCounts[w].senders[s] = (wordCounts[w].senders[s] || 0) + 1;
+                // === PERFORMANCE: Only collect n-gram sizes we actually need ===
+                for (let n = 1; n <= maxNGram; n++) {
+                    if (foundWords.length < n) continue;
+                    const wordLimit = Math.min(foundWords.length, 80);
+                    const seenInThisMessage = new Set();
+                    
+                    // For n>1, use NON-OVERLAPPING stride (step by n) to prevent
+                    // sliding-window variants like "A B C", "B C D", "C D E" from all
+                    // accumulating counts in the same forwarded/repetitive message.
+                    // Unigrams (n=1) still slide by 1 since they can't "overlap".
+                    const step = n > 1 ? n : 1;
+                    
+                    for (let i = 0; i <= wordLimit - n; i += step) {
+                        const chunk = foundWords.slice(i, i + n);
+                        if (n === 1) {
+                            if (stopWords.has(chunk[0]) || chunk[0].length > 20 || chunk[0].length < 4) continue;
+                        }
+                        
+                        const phrase = chunk.join(' ');
+                        if (phrase.length > 70 || seenInThisMessage.has(phrase)) continue;
+                        seenInThisMessage.add(phrase);
+
+                        if (!wordCounts[phrase]) {
+                            wordCounts[phrase] = { total: 0, senders: {}, msgIds: new Set(), len: n };
+                        }
+                        if (!wordCounts[phrase].msgIds.has(msg.i)) {
+                            wordCounts[phrase].msgIds.add(msg.i);
+                            wordCounts[phrase].total++;
+                            wordCounts[phrase].senders[s] = (wordCounts[phrase].senders[s] || 0) + 1;
+                        }
+                    }
                 }
             }
         }
     }
+
+    // === POST-PROCESSING ===
+    
+    // 1. Min Usage Filter (O(N) prune - run first to shrink the working set)
+    const minInput = document.getElementById('pulse-word-min');
+    const minUsage = minInput ? parseInt(minInput.value) || 5 : 5;
+    for (const w of Object.keys(wordCounts)) {
+        if (wordCounts[w].total < minUsage) delete wordCounts[w];
+    }
+
+    // 2. Message-Set Deduplication (Anti-Template Filter)
+    // Phrases that appear in EXACTLY the same set of messages are all fragments
+    // of the same repeated template (e.g. news channel promo footers).
+    // Keep only the highest-frequency phrase per group to surface one clean result.
+    {
+        const templateGroups = new Map(); // fingerprint → [phrase, ...]
+        for (const [phrase, data] of Object.entries(wordCounts)) {
+            // Fingerprint = sorted message IDs joined as string
+            const fp = [...data.msgIds].sort((a, b) => a - b).join(',');
+            if (!templateGroups.has(fp)) templateGroups.set(fp, []);
+            templateGroups.get(fp).push(phrase);
+        }
+        for (const [, group] of templateGroups) {
+            if (group.length <= 1) continue;
+            // Sort group by frequency descending, delete all but the top
+            group.sort((a, b) => wordCounts[b].total - wordCounts[a].total);
+            for (let k = 1; k < group.length; k++) delete wordCounts[group[k]];
+        }
+    }
+
+    // 3. O(N) Subsumption Filtering (Maximal Phrases)
+    const toRemove = new Set();
+    const sortedByLen = Object.keys(wordCounts).sort((a, b) => wordCounts[b].len - wordCounts[a].len);
+    for (const p of sortedByLen) {
+        if (wordCounts[p].len <= 1) continue;
+        const words = p.split(' ');
+        const f1 = words.slice(0, -1).join(' ');
+        const f2 = words.slice(1).join(' ');
+        if (wordCounts[f1] && wordCounts[f1].total < 1.1 * wordCounts[p].total) toRemove.add(f1);
+        if (wordCounts[f2] && wordCounts[f2].total < 1.1 * wordCounts[p].total) toRemove.add(f2);
+    }
+    toRemove.forEach(p => delete wordCounts[p]);
+
+    // Cleanup Set data to free memory
+    for (const w in wordCounts) { delete wordCounts[w].msgIds; }
 
     // Assign simple stats
     stats.circadian = hours;
@@ -237,27 +314,33 @@ function computePulseStats(messages) {
     stats.sender_battle = Object.entries(senderCounts).sort((a, b) => b[1] - a[1]).map(([name, count]) => ({ name, count }));
     stats.emojis = Object.entries(emojiCounts).sort((a, b) => b[1].total - a[1].total).slice(0, 10).map(([emoji, data]) => ({ emoji, count: data.total, senders: data.senders }));
 
-    // Apply Min Usage Filter
-    const minInput = document.getElementById('pulse-word-min');
-    const minUsage = minInput ? parseInt(minInput.value) || 5 : 5;
-    for (const w of Object.keys(wordCounts)) { if (wordCounts[w].total < minUsage) delete wordCounts[w]; }
-
+    // 3. Display Filter: strict exact-length match
+    //    (e.g., displayMinLen=1 → show ONLY 1-word phrases)
+    //    If subsumption promoted a longer phrase in its place, it won't appear because
+    //    it's not of the selected length — this is intentional "Phrase Length" behavior.
+    const displayMinLen = maxNGram; // same as the user's selected value (read above)
+    
     // Apply Percentile Filter
     const pctInput = document.getElementById('pulse-word-pct');
     const targetPct = pctInput ? parseInt(pctInput.value) / 100.0 : 0.10;
-    if (targetPct < 1.0) {
-        const allWords = Object.entries(wordCounts).sort((a, b) => b[1].total - a[1].total);
-        const totalOccurrences = allWords.reduce((sum, item) => sum + item[1].total, 0);
+    
+    // Only include phrases of the exact selected length
+    let candidates = Object.entries(wordCounts).filter(([, data]) => data.len === displayMinLen);
+
+    if (targetPct < 1.0 && candidates.length > 0) {
+        const sortedCandidates = candidates.sort((a, b) => b[1].total - a[1].total);
+        const totalOccurrences = sortedCandidates.reduce((sum, item) => sum + item[1].total, 0);
         const cutoffThreshold = totalOccurrences * (1.0 - targetPct);
         let cumulative = 0;
-        const filteredCounts = {};
-        for (const [w, data] of allWords) {
-            cumulative += data.total;
-            if (cumulative > cutoffThreshold) filteredCounts[w] = data;
+        const filtered = [];
+        for (const entry of sortedCandidates) {
+            cumulative += entry[1].total;
+            if (cumulative > cutoffThreshold) filtered.push(entry);
         }
-        wordCounts = filteredCounts;
+        candidates = filtered;
     }
-    stats.words = Object.entries(wordCounts).sort((a, b) => b[1].total - a[1].total).slice(0, 15).map(([word, data]) => ({ word, count: data.total, senders: data.senders }));
+    
+    stats.words = candidates.sort((a, b) => b[1].total - a[1].total).slice(0, 15).map(([word, data]) => ({ word, count: data.total, senders: data.senders }));
 
     // Top stickers & GIFs
     stats.stickers = Object.values(stickerCounts).sort((a, b) => b.total - a.total).slice(0, 10).map(v => ({ path: '/media?path=' + v.path, name: v.path.split(/[/\\]/).pop(), count: v.total, senders: v.senders }));
@@ -946,8 +1029,8 @@ async function fetchAndRenderChatDynamics() {
     const sendersQuery = isAllSenders ? 'all' : Array.from(pulseCurrentSenders).join(',');
     const startDate = document.getElementById('pulse-start-date')?.value || '';
     const endDate = document.getElementById('pulse-end-date')?.value || '';
-    const iceGap = document.getElementById('pulse-ice-gap')?.value || 8;
-    const ghsGap = document.getElementById('pulse-ghs-gap')?.value || 4;
+    const iceGap = parseInt(document.getElementById('pulse-ice-gap')?.value) || 8;
+    const ghsGap = parseInt(document.getElementById('pulse-ghs-gap')?.value) || 4;
 
     const currentParams = `${startDate}|${endDate}|${sendersQuery}|${iceGap}|${ghsGap}`;
     
@@ -1083,20 +1166,30 @@ function renderDynamicsGhosting(top10) {
     const el = document.getElementById('dyn-content-ghosting');
     el.innerHTML = '';
 
+    // Read the user-selected threshold to update legend dynamically
+    const gapThresholdHours = document.getElementById('pulse-ghs-gap') ? parseInt(document.getElementById('pulse-ghs-gap').value) || 1 : 1;
+    
+    const ghostThreshold = gapThresholdHours;
     const CATEGORIES = [
-        { key: 'insta',   label: 'Insta',   color: '#10b981', desc: 'Under 30s' },
+        { key: 'insta',   label: 'Inter',   color: '#10b981', desc: '< 30s' },
         { key: 'active',  label: 'Active',  color: '#3b82f6', desc: '30s – 5m'  },
-        { key: 'delayed', label: 'Delayed', color: '#f59e0b', desc: '5m – 1h'   },
-        { key: 'ghosted', label: 'Ghosted', color: '#ef4444', desc: 'Over 1h'   }
+        { key: 'delayed', label: 'Delayed', color: '#f59e0b', desc: '5m – 1h'   }
     ];
-
-    const valid = top10.filter(s => s.ghost_stats && s.total_ghost_records > 0);
-
-    if (valid.length === 0) {
-        el.innerHTML = `<div style="text-align:center; padding: 20px; color: var(--pulse-text-muted);">Not enough reply data at this gap threshold.</div>`;
-        return;
+    
+    // Logic must perfectly sync with run_ui.py (v7)
+    if (ghostThreshold > 1) {
+        CATEGORIES.push({ key: 'ghosted', label: 'Ghosted', color: '#ef4444', desc: `1h – ${ghostThreshold}h` });
+        CATEGORIES.push({ key: 'extended', label: 'Extended', color: '#7f1d1d', desc: `≥ ${ghostThreshold}h` });
+    } else {
+        CATEGORIES.push({ key: 'ghosted', label: 'Ghosted', color: '#ef4444', desc: '≥ 1h' });
     }
 
+    const valid = top10.filter(s => s.ghost_stats);
+    if (valid.length === 0) {
+        el.innerHTML = `<div style="text-align:center; padding: 20px; color: var(--pulse-text-muted);">No reply data.</div>`;
+        return;
+    }
+    
     // Legend
     el.innerHTML = `<div style="display:flex; gap:10px; margin-bottom:10px; flex-wrap: wrap;">${
         CATEGORIES.map(c => `<span style="display:flex; align-items:center; gap:4px; font-size:11px; color:var(--pulse-text-muted);">
@@ -1104,25 +1197,22 @@ function renderDynamicsGhosting(top10) {
         </span>`).join('')
     }</div>`;
 
-    function formatTime(mins) {
-        const secs = mins * 60;
-        if (secs < 90) return `${Math.round(secs)}s`;
-        if (mins < 90) return `${mins.toFixed(1)}m`;
-        return `${(mins/60).toFixed(1)}h`;
-    }
-
     valid.forEach(sender => {
-        const total = sender.total_ghost_records;
         const gs = sender.ghost_stats;
+        let totalRecords = 0;
+        for (const k in gs) {
+             if (gs[k] && gs[k].count) totalRecords += gs[k].count;
+        }
+        if (totalRecords === 0) return;
 
         // Build stacked bar segments HTML
         const segments = CATEGORIES.map(c => {
             const bucket = gs[c.key];
             if (!bucket || bucket.count === 0) return '';
             const pct = bucket.pct;
-            const avgFmt = formatTime(bucket.avg_mins);
-            const tooltipHtml = `<b>${c.label}</b> (${c.desc})<hr style="border-color:#333; margin:3px 0;">Count: ${bucket.count} of ${total}<br>Avg time: ${avgFmt}<br>Share: ${pct}%`;
-            return `<div class="pulse-tooltip" style="display:inline-flex; width:${pct}%; height:100%; background:${c.color}; position:relative; min-width: ${pct > 0 ? '4px' : '0'};">
+            const tooltipHtml = `<b>${c.label}</b> (${c.desc})<hr style="border-color:#333; margin:3px 0;">Count: ${bucket.count} of ${totalRecords}<br>Share: ${pct}%`;
+            // Use a min-width of 2px for any category with count > 0 to ensure visibility
+            return `<div class="pulse-tooltip" style="display:inline-flex; align-items:center; justify-content:center; width:${pct}%; height:100%; background:${c.color}; position:relative; min-width: 2px;">
                 <div class="pulse-tooltip-text">${tooltipHtml}</div>
             </div>`;
         }).join('');
@@ -1134,7 +1224,7 @@ function renderDynamicsGhosting(top10) {
                         <img src="/avatar/${encodeURIComponent(sender.name)}" style="width:20px; height:20px; border-radius:50%;">
                         <span>${sender.name}</span>
                     </div>
-                    <span style="color: var(--pulse-text-muted); font-size:11px;">${total} tracked replies</span>
+                    <span style="color: var(--pulse-text-muted); font-size:11px;">${totalRecords} tracked replies</span>
                 </div>
                 <div style="height:10px; background:rgba(255,255,255,0.08); border-radius:5px; overflow:visible; display:flex;">
                     ${segments}
@@ -1181,31 +1271,76 @@ function renderDynamicsBurst(top10) {
     const el = document.getElementById('dyn-content-burst');
     el.innerHTML = '';
     
-    const sorted = [...top10].sort((a, b) => b.burst_ratio - a.burst_ratio); // Highest burst ratio first
-    const maxRatio = sorted.length ? sorted[0].burst_ratio : 1;
+    const sorted = [...top10].sort((a, b) => b.burst_ratio - a.burst_ratio);
     
+    let html = '';
     sorted.forEach((sender, i) => {
-        const pct = (sender.burst_ratio / maxRatio) * 100;
+        const linePct = sender.burst_ratio;
+        const tooltipContent = sender.burst_record ? 
+            `<b>Consecutive Texts Record</b><hr style="border-color:#333; margin:4px 0;">Sequence: ${sender.burst_record.len} msgs in a row<br>Started: ${sender.burst_record.date}<br>Average Sequence: ${sender.avg_burst} msgs` : '';
         
-        let tooltipContent = '';
-        if (sender.burst_record) {
-            tooltipContent = `<b>Consecutive Texts Record</b><hr style="border-color:#333; margin:4px 0;">Sequence: ${sender.burst_record.len} msgs in a row<br>Started: ${sender.burst_record.date}<br>Average Sequence: ${sender.avg_burst} msgs`;
+        let stackGraphHtml = '';
+        if (sender.burst_freq) {
+            let totalBursts = Object.values(sender.burst_freq).reduce((a, b) => a + b, 0);
+            if (totalBursts > 0) {
+                const colors = ['#c084fc', '#a855f7', '#9333ea', '#7e22ce', '#6b21a8', '#db2777', '#be185d', '#9d174d', '#831843'];
+                const burstKeys = Object.keys(sender.burst_freq).map(Number).sort((a,b) => a-b);
+                
+                const barsHtml = burstKeys.map((len, idx) => {
+                    const count = sender.burst_freq[len];
+                    if (count === 0) return '';
+                    const cPct = (count / totalBursts) * 100;
+                    const color = colors[Math.min(idx, colors.length - 1)];
+                    const label = (len === 10) ? '10+' : len;
+                    const localTooltip = `<b>${label} msgs in a row</b><br>Count: ${count}<br>Share: ${cPct.toFixed(1)}%`;
+                    
+                    return `<div class="pulse-tooltip" style="width: ${cPct}%; height: 100%; background: ${color}; min-width: ${cPct > 0 ? '4px' : '0'}; display: flex; align-items: center; justify-content: center; font-size: 9px; color: white;">
+                        ${cPct > 10 ? label : ''}
+                        <div class="pulse-tooltip-text" style="bottom: 120%;">${localTooltip}</div>
+                    </div>`;
+                }).join('');
+                
+                stackGraphHtml = `
+                    <div class="burst-breakdown" style="display: none; margin-top: 10px; padding-top: 10px; border-top: 1px solid rgba(255,255,255,0.1);">
+                        <div style="font-size: 11px; margin-bottom: 6px; color: var(--pulse-text-muted);">Consecutive Response Breakdown:</div>
+                        <div style="height: 14px; background: rgba(255,255,255,0.05); border-radius: 4px; display: flex; overflow: hidden;">
+                            ${barsHtml}
+                        </div>
+                    </div>
+                `;
+            }
         }
         
-        el.innerHTML += `
-            <div class="pulse-tooltip" style="margin-bottom: 12px; position: relative; z-index: ${100-i}; text-align: left;">
-                ${tooltipContent ? `<div class="pulse-tooltip-text" style="width: 250px; text-align: left; left: 0; transform: translateY(5px); bottom: auto;">${tooltipContent}</div>` : ''}
-                <div style="display:flex; justify-content:space-between; margin-bottom: 4px; font-size: 12px;">
+        const rowId = `burst-row-${i}`;
+        html += `
+            <div id="${rowId}" class="pulse-burst-row" style="margin-bottom: 12px; background: rgba(0,0,0,0.2); padding: 12px; border-radius: 8px; cursor: pointer; transition: all 0.2s; position: relative; z-index: ${100-i};" onclick="toggleBurstBreakdown('${rowId}')">
+                <div style="display:flex; justify-content:space-between; align-items: center; margin-bottom: 10px; font-size: 13px; pointer-events: none;">
                     <div style="display:flex; align-items:center; gap:8px;">
-                        <img src="/avatar/${encodeURIComponent(sender.name)}" style="width:20px; height:20px; border-radius:50%;">
-                        <span>${sender.name}</span>
+                        <img src="/avatar/${encodeURIComponent(sender.name)}" style="width:24px; height:24px; border-radius:50%;">
+                        <span style="font-weight: 500;">${sender.name}</span>
                     </div>
-                    <span>Burst Ratio: ${sender.burst_ratio}%</span>
+                    <div class="pulse-tooltip" style="position: relative; pointer-events: auto;">
+                        <span style="color: #a78bfa; font-weight: 600;">Ratio: ${sender.burst_ratio}%</span>
+                        ${tooltipContent ? `<div class="pulse-tooltip-text" style="width: 250px; text-align: left; right: 0; bottom: 120%;">${tooltipContent}</div>` : ''}
+                    </div>
                 </div>
-                <div style="height: 6px; background: rgba(255,255,255,0.1); border-radius: 3px; overflow: hidden;">
-                    <div style="height: 100%; width: ${pct}%; background: #8b5cf6; border-radius: 3px;"></div>
+                <div style="height: 6px; background: rgba(255,255,255,0.1); border-radius: 3px; overflow: hidden; width: 100%; pointer-events: none;">
+                    <div style="height: 100%; width: ${linePct}%; background: linear-gradient(90deg, #8b5cf6, #d946ef); border-radius: 3px;"></div>
                 </div>
+                ${stackGraphHtml}
             </div>
         `;
     });
+    el.innerHTML = html;
 }
+
+// Global helper to toggle the breakdown inside the custom row
+window.toggleBurstBreakdown = function(rowId) {
+    const row = document.getElementById(rowId);
+    if (!row) return;
+    const bd = row.querySelector('.burst-breakdown');
+    if (!bd) return;
+    const isHidden = bd.style.display === 'none';
+    bd.style.display = isHidden ? 'block' : 'none';
+    row.style.background = isHidden ? 'rgba(255,255,255,0.05)' : 'rgba(0,0,0,0.2)';
+};

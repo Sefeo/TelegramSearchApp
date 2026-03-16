@@ -186,7 +186,12 @@
                             <button class="pulse-dyn-tab" data-tab="icebreaker" onclick="switchDynamicsTab('icebreaker')" style="background: transparent; color: var(--pulse-text-muted); border: 1px solid transparent; border-radius: 4px; padding: 4px 8px; cursor: pointer;">Icebreaker</button>
                             <button class="pulse-dyn-tab" data-tab="ghosting" onclick="switchDynamicsTab('ghosting')" style="background: transparent; color: var(--pulse-text-muted); border: 1px solid transparent; border-radius: 4px; padding: 4px 8px; cursor: pointer;">Ghosting</button>
                             <button class="pulse-dyn-tab" data-tab="length" onclick="switchDynamicsTab('length')" style="background: transparent; color: var(--pulse-text-muted); border: 1px solid transparent; border-radius: 4px; padding: 4px 8px; cursor: pointer;">Length</button>
-                            <button class="pulse-dyn-tab" data-tab="burst" onclick="switchDynamicsTab('burst')" style="background: transparent; color: var(--pulse-text-muted); border: 1px solid transparent; border-radius: 4px; padding: 4px 8px; cursor: pointer;">Double-Texter</button>
+                            <button class="pulse-dyn-tab" data-tab="burst" onclick="switchDynamicsTab('burst')" style="background: transparent; color: var(--pulse-text-muted); border: 1px solid transparent; border-radius: 4px; padding: 4px 8px; cursor: pointer; display: flex; align-items: center; gap: 4px;">
+                                Double-Texter
+                                <span class="pulse-tooltip" style="cursor:help; font-size:10px; background:rgba(255,255,255,0.1); border-radius:50%; width:14px; height:14px; display:inline-flex; align-items:center; justify-content:center;">?
+                                    <div class="pulse-tooltip-text" style="width:200px; white-space:normal; font-weight:normal;">Burst Ratio is the % of messages sent in consecutive sequences (double texts). Click a user to see their breakdown!</div>
+                                </span>
+                            </button>
                         </div>
                     </div>
                     <div style="display: flex; flex-direction: column; gap: 6px; font-size: 11px; color: var(--pulse-text-muted); background: rgba(0,0,0,0.2); padding: 8px 10px; border-radius: 4px; min-width: 160px;">
@@ -236,6 +241,10 @@
                             <input type="range" id="pulse-word-pct" min="1" max="100" value="10" style="width: 100%;">
                             <span id="pulse-word-pct-val" style="width: 35px; text-align: right; font-weight: bold;">10%</span>
                         </div>
+                    </div>
+                    <div style="display: flex; align-items: center; justify-content: space-between; gap: 10px;">
+                        <span>Phrase Length:</span>
+                        <input type="number" id="pulse-phrase-len" min="1" max="5" value="1" style="width: 60px; background: rgba(255,255,255,0.1); border: 1px solid var(--glass-border); color: white; border-radius: 4px; padding: 2px 5px; outline: none;">
                     </div>
                     <div style="display: flex; align-items: center; justify-content: space-between; gap: 10px;">
                         <span>Min. Usage:</span>
