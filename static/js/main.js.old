@@ -1,0 +1,1558 @@
+const chat = document.getElementById('chat');
+        const colorCache = {};
+        const colors = ['#e17076', '#7bc862', '#65aadd', '#a695e7', '#ee7aae', '#6ec9cb', '#faa774'];
+        function getColor(name) {
+            if (!colorCache[name]) colorCache[name] = colors[Object.keys(colorCache).length % colors.length];
+            return colorCache[name];
+        }
+		
+		// Waveforms setting preference
+		const waveSetting = document.getElementById('setting-auto-wave');
+        waveSetting.checked = localStorage.getItem('autoWaveforms') === 'true';
+        waveSetting.addEventListener('change', (e) => localStorage.setItem('autoWaveforms', e.target.checked));
+
+        // --- MEDIA PLAYER LOGIC ---
+        const engine = document.getElementById('media-engine');
+        const playerBar = document.getElementById('global-player');
+        const playPauseBtn = document.getElementById('play-pause-btn');
+        const seekBar = document.getElementById('seek-bar');
+        const timeDisplay = document.getElementById('time-display');
+        const speedBtn = document.getElementById('speed-btn');
+        const vidPreview = document.getElementById('player-video');
+        const speeds = [1, 1.5, 2];
+        let currentSpeedIdx = 0;
+		let isDragging = false;
+		let currentPlayingPath = null; 
+		let currentPlayingMsgId = null;
+        let currentPlayingType = null;
+		let messageDataStore = {}; // Stores all loaded message data for quick access when copying
+        let selectionMode = false;
+        let selectedIds = new Set();
+        let rightClickedMsgId = null;
+		let isDraggingSelection = false;
+        let dragSelectMode = true; 
+		let rightClickedLinkUrl = null; 
+		let rightClickedMediaItem = null;
+		
+		document.getElementById('sidebar-content').addEventListener('scroll', function() {
+            document.getElementById('btn-sidebar-up').style.display = this.scrollTop > 100 ? 'flex' : 'none';
+        });
+		
+		// Sidebar scroll up button logic
+        document.getElementById('sidebar-content').addEventListener('scroll', function() {
+            document.getElementById('btn-sidebar-up').style.display = this.scrollTop > 100 ? 'flex' : 'none';
+        });
+		
+		// --- SMOOTH PLAYBACK LOGIC ---
+        let animationFrameId;
+
+        function startSmoothAnimation() {
+            // Stop any existing loop to prevent duplicates
+            if (animationFrameId) cancelAnimationFrame(animationFrameId);
+            
+            function step() {
+                updatePlaybackUI(); // Update bars and text
+                if (!engine.paused && !engine.ended) {
+                    animationFrameId = requestAnimationFrame(step);
+                }
+            }
+            animationFrameId = requestAnimationFrame(step);
+        }
+
+        function stopSmoothAnimation() {
+            if (animationFrameId) cancelAnimationFrame(animationFrameId);
+        }
+
+        function updatePlaybackUI() {
+            if (!engine.duration) return;
+            
+            const currentTime = engine.currentTime;
+            const duration = engine.duration;
+            const percent = (currentTime / duration) * 100;
+            
+            // 1. Update Top Seek Bar (Only if user is not currently dragging it)
+            const seekBar = document.getElementById('seek-bar');
+            if (!isDraggingSeekBar) {
+                seekBar.value = percent || 0;
+            }
+            
+            // 2. Update Top Time Display
+            document.getElementById('time-display').innerText = `${formatTime(currentTime)} / ${formatTime(duration)}`;
+            
+            // 3. Update Round Video Sync (Loose sync to prevent jitter)
+            if (currentPlayingType === 'round_video' && currentPlayingMsgId) {
+                const rv = document.getElementById(`rv-${currentPlayingMsgId}`);
+                // Only correct if drift is significant (>0.2s)
+                if (rv && Math.abs(rv.currentTime - currentTime) > 0.2) {
+                    rv.currentTime = currentTime;
+                }
+            }
+            
+            // 4. Update Voice Waveform & Time (The key part for smoothness)
+            if (currentPlayingType === 'voice' && currentPlayingMsgId) {
+                const canvas = document.getElementById(`vp-canvas-${currentPlayingMsgId}`);
+                if (canvas) {
+                    const msg = messageDataStore[currentPlayingMsgId];
+                    drawWaveform(canvas, currentPlayingMsgId, currentTime / duration, msg ? msg.waveform : null);
+                    
+                    const vpTime = document.getElementById(`vp-time-${currentPlayingMsgId}`);
+                    if (vpTime) vpTime.innerText = `${formatTime(currentTime)} / ${formatTime(duration)}`;
+                }
+            }
+	
+        }
+		
+		async function processRealWaveform(path, msgId) {
+            let audioCtx = null;
+            try {
+                const url = `/media?path=${encodeURIComponent(path)}`;
+                const response = await fetch(url);
+                const arrayBuffer = await response.arrayBuffer();
+                
+                audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+                const audioBuffer = await audioCtx.decodeAudioData(arrayBuffer);
+
+                const channelData = audioBuffer.getChannelData(0);
+                // Increase resolution to 100 for better detail
+                const samples = 100; 
+                const blockSize = Math.floor(channelData.length / samples);
+                const peaks = [];
+                let max = 0;
+
+                for (let i = 0; i < samples; i++) {
+                    let peak = 0;
+                    for (let j = 0; j < blockSize; j++) {
+                        const val = Math.abs(channelData[i * blockSize + j]);
+                        if (val > peak) peak = val;
+                    }
+                    peaks.push(peak);
+                    if (peak > max) max = peak;
+                }
+
+                // 1. Normalize (0 to 1)
+                // 2. Apply Gamma Correction (power of 0.7) to boost quiet sounds
+                // 3. Ensure a minimum baseline (0.02) so silence isn't completely invisible
+                const normalized = peaks.map(p => {
+                    const norm = max ? p / max : 0;
+                    return Math.max(0.02, Math.pow(norm, 0.7)); 
+                });
+                
+                const waveStr = JSON.stringify(normalized);
+
+                if (messageDataStore[msgId]) messageDataStore[msgId].waveform = waveStr;
+
+                await fetch('/api/save_waveform', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ id: msgId, waveform: waveStr })
+                });
+
+                const canvas = document.getElementById(`vp-canvas-${msgId}`);
+                if (canvas) {
+                    const prog = engine.duration ? (engine.currentTime / engine.duration) : 0;
+                    drawWaveform(canvas, msgId, prog, waveStr);
+                }
+                return true;
+            } catch (e) {
+                console.error(`Waveform generation failed for ID ${msgId}:`, e);
+                return false;
+            } finally {
+                if (audioCtx && audioCtx.state !== 'closed') {
+                    await audioCtx.close();
+                }
+            }
+        }
+
+        async function generateAllWaveforms(force = false) {
+            const btn = document.getElementById('btn-gen-all');
+            const originalText = force ? "Force Regenerate ALL" : "Generate missing waveforms for ALL messages";
+            
+            btn.innerText = "Scanning database...";
+            btn.disabled = true;
+
+            try {
+                // Pass the force flag to the server
+                const res = await fetch(`/api/missing_waveforms?force=${force}`);
+                const missing = await res.json();
+                
+                if (missing.length === 0) {
+                    btn.innerText = "No waveforms to generate.";
+                    setTimeout(() => { btn.innerText = originalText; btn.disabled = false; }, 3000);
+                    return;
+                }
+
+                for (let i = 0; i < missing.length; i++) {
+                    btn.innerText = `Processing ${i + 1} / ${missing.length}...`;
+                    await processRealWaveform(missing[i].media_path, missing[i].id);
+                }
+
+                btn.innerText = "✅ Done!";
+            } catch (e) {
+                btn.innerText = "Error. Check console.";
+                console.error(e);
+            }
+
+            setTimeout(() => { btn.innerText = originalText; btn.disabled = false; }, 3000);
+        }
+		
+		function drawWaveform(canvas, msgId, progress = 0, realWaveformStr = null) {
+            if (!canvas) return;
+            if (isNaN(progress) || !isFinite(progress)) progress = 0;
+            
+            const ctx = canvas.getContext('2d');
+            const width = canvas.width;
+            const height = canvas.height;
+            const barWidth = 3;
+            const gap = 2;
+            const bars = Math.floor(width / (barWidth + gap));
+            const accentColor = '#5288c1'; 
+            const grayColor = 'rgba(127,145,164,0.5)';
+
+            // Parse data
+            let realData = [];
+            if (realWaveformStr) {
+                try { realData = JSON.parse(realWaveformStr); } catch (e) {}
+            }
+
+            // Seed for fake waveform fallback
+            let seed = msgId; 
+            const random = () => { let x = Math.sin(seed++) * 10000; return x - Math.floor(x); };
+
+            // Helper to draw all bars in a specific color
+            const drawBars = (color) => {
+                ctx.fillStyle = color;
+                for (let i = 0; i < bars; i++) {
+                    let barHeight;
+                    if (realData.length > 0) {
+                        const dataIdx = Math.floor((i / bars) * realData.length);
+                        const val = realData[Math.min(dataIdx, realData.length - 1)] || 0.05;
+                        barHeight = Math.max(4, val * height); 
+                    } else {
+                        barHeight = 4 + random() * (height - 8);
+                    }
+                    
+                    const x = i * (barWidth + gap);
+                    const y = (height - barHeight) / 2;
+                    
+                    ctx.beginPath();
+                    if (ctx.roundRect) ctx.roundRect(x, y, barWidth, barHeight, 5); 
+                    else ctx.rect(x, y, barWidth, barHeight); 
+                    ctx.fill();
+                }
+            };
+
+            // 1. Clear Canvas
+            ctx.clearRect(0, 0, width, height);
+
+            // 2. Draw the background (Gray) bars completely
+            drawBars(grayColor);
+
+            // 3. Draw the foreground (Blue) bars with a Clipping Mask
+            ctx.save();
+            ctx.beginPath();
+            // Define a rectangle that represents the current audio progress (pixel perfect)
+            ctx.rect(0, 0, width * progress, height);
+            ctx.clip(); // Restrict drawing to this rectangle
+            
+            drawBars(accentColor); // Draw blue bars (only visible inside the clip)
+            ctx.restore();
+        }
+
+		function seekVoice(event, msgId) {
+            event.stopPropagation();
+            if (currentPlayingMsgId !== msgId || currentPlayingType !== 'voice') {
+                const btn = document.getElementById(`vp-btn-${msgId}`);
+                if (btn) btn.click();
+                setTimeout(() => seekVoice(event, msgId), 200);
+                return;
+            }
+            
+            const canvas = document.getElementById(`vp-canvas-${msgId}`);
+            if (!canvas) return;
+            const rect = canvas.getBoundingClientRect();
+            const progress = (event.clientX - rect.left) / rect.width;
+            
+            if (engine.duration) { engine.currentTime = engine.duration * progress; }
+            
+            const msg = messageDataStore[msgId];
+            drawWaveform(canvas, msgId, progress, msg ? msg.waveform : null); // <-- Passes real data
+        }
+
+        // Context Menu trigger
+        document.addEventListener('contextmenu', (e) => {
+            const msgRow = e.target.closest('.msg-row');
+            const mediaItem = e.target.closest('.media-grid-item, .media-list-item');
+            rightClickedMediaItem = mediaItem;
+			
+            if (msgRow || mediaItem) {
+                e.preventDefault();
+                rightClickedMsgId = msgRow ? msgRow.id : `msg-${mediaItem.dataset.id}`;
+                const numericId = parseInt(rightClickedMsgId.replace('msg-', ''));
+                const msg = messageDataStore[numericId];
+                
+                const menu = document.getElementById('context-menu');
+                if (!menu) return;
+
+                // Safe helper to prevent silent crashes if an HTML element is missing
+                const toggleItem = (id, condition) => {
+                    const el = document.getElementById(id);
+                    if (el) el.style.display = condition ? 'block' : 'none';
+                };
+
+                // 1. "Select" (Only show if clicked inside the chat, not media menu)
+                toggleItem('menu-select-msg', !!msgRow);
+
+                // 2. "See in dialogue" (Only show if clicked from media menu)
+                toggleItem('menu-jump-dialogue', !!mediaItem);
+
+                // 3. Selection until here logic
+                toggleItem('menu-select-until', msgRow && selectionMode && selectedIds.size > 0 && !selectedIds.has(numericId));
+
+                // 4. Link logic
+                const linkTarget = e.target.closest('.chat-link');
+                if (linkTarget) rightClickedLinkUrl = linkTarget.href;
+                toggleItem('menu-copy-link', !!linkTarget);
+
+                // 5. Image copying logic
+                toggleItem('menu-copy-image', msg && msg.media_type === 'photo');
+
+                // 6. Open Destination logic
+                toggleItem('menu-open-dest', msg && msg.media_path);
+
+                menu.style.display = 'block';
+                
+                // Set initial position
+                let x = e.pageX;
+                let y = e.pageY;
+                menu.style.left = x + 'px';
+                menu.style.top = y + 'px';
+                
+                // Wait 1 frame to prevent menu from clipping off the edge of the screen
+                setTimeout(() => {
+                    const rect = menu.getBoundingClientRect();
+                    if (x + rect.width > window.innerWidth) x = window.innerWidth - rect.width - 5;
+                    if (y + rect.height > window.innerHeight) y = window.innerHeight - rect.height - 5;
+                    menu.style.left = x + 'px';
+                    menu.style.top = y + 'px';
+                }, 0);
+            }
+        });
+		
+        function jumpToRightClicked() {
+            document.getElementById('context-menu').style.display = 'none';
+            if (rightClickedMsgId) {
+                const numericId = rightClickedMsgId.replace('msg-', '');
+                // No longer closes the media menu
+                jumpToContext(numericId, null, rightClickedMediaItem);
+            }
+        }
+		
+		// Slide-to-Select: Mouse Down (Start Dragging)
+        chat.addEventListener('mousedown', (e) => {
+            const menu = document.getElementById('context-menu');
+            
+            // If menu is open, close it and DO NOT select anything.
+            if (menu.style.display === 'block') {
+                menu.style.display = 'none';
+                return; // Stop execution here
+            }
+
+            if (selectionMode && e.button === 0) { // Left click only
+                const msgRow = e.target.closest('.msg-row');
+                if (msgRow) {
+                    e.preventDefault(); 
+                    isDraggingSelection = true;
+                    const numericId = parseInt(msgRow.id.replace('msg-', ''));
+                    dragSelectMode = !selectedIds.has(numericId);
+                    setSelectionState(msgRow.id, dragSelectMode);
+                }
+            }
+        }, true);
+
+        // Slide-to-Select: Mouse Over (Apply selection to hovered items)
+        chat.addEventListener('mouseover', (e) => {
+            if (selectionMode && isDraggingSelection) {
+                const msgRow = e.target.closest('.msg-row');
+                if (msgRow) {
+                    setSelectionState(msgRow.id, dragSelectMode);
+                }
+            }
+        });
+
+        // Slide-to-Select: Mouse Up (Stop Dragging)
+        window.addEventListener('mouseup', (e) => {
+            if (e.button === 0) {
+                isDraggingSelection = false;
+            }
+        });
+		
+        chat.addEventListener('click', (e) => {
+            if (selectionMode) {
+                const msgRow = e.target.closest('.msg-row');
+                if (msgRow) {
+                    e.preventDefault();
+                    e.stopPropagation(); 
+                    // Toggling is already handled by 'mousedown', so we just stop the event here
+                }
+            }
+        }, true);
+
+        // Hide context menu when clicking elsewhere
+        document.addEventListener('click', () => {
+            document.getElementById('context-menu').style.display = 'none';
+        });
+
+        // Intercept clicks during Selection Mode
+        chat.addEventListener('click', (e) => {
+            if (selectionMode) {
+                const msgRow = e.target.closest('.msg-row');
+                if (msgRow) {
+                    // Block opening links/images while selecting
+                    e.preventDefault();
+                    e.stopPropagation(); 
+                }
+            }
+        }, true);
+
+        // Ctrl+C shortcut for copying
+        document.addEventListener('keydown', e => {
+            // Check for Ctrl (Windows) or Meta (Mac) + C
+            // We use e.code === 'KeyC' so it works on English, Ukrainian, and Russian layouts
+            if (selectionMode && (e.ctrlKey || e.metaKey) && e.code === 'KeyC') {
+                e.preventDefault();
+                copySelected();
+            }
+        });
+		
+		// --- ADD THESE ACTION FUNCTIONS ---
+        function copyRightClickedLink() {
+            document.getElementById('context-menu').style.display = 'none';
+            if (rightClickedLinkUrl) {
+                navigator.clipboard.writeText(rightClickedLinkUrl);
+            }
+        }
+
+        async function openRightClickedDestination() {
+            document.getElementById('context-menu').style.display = 'none';
+            if (!rightClickedMsgId) return;
+            const numericId = parseInt(rightClickedMsgId.replace('msg-', ''));
+            const msg = messageDataStore[numericId];
+            
+            if (msg && msg.media_path) {
+                await fetch('/api/open_file', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ path: msg.media_path })
+                });
+            }
+        }
+
+        async function copyRightClickedImage() {
+            document.getElementById('context-menu').style.display = 'none';
+            if (!rightClickedMsgId) return;
+            const numericId = parseInt(rightClickedMsgId.replace('msg-', ''));
+            const msg = messageDataStore[numericId];
+            
+            if (!msg || msg.media_type !== 'photo') return;
+
+            try {
+                const safePath = encodeURIComponent(msg.media_path);
+                const response = await fetch(`/media?path=${safePath}`);
+                const blob = await response.blob();
+                
+                // The Clipboard API requires images to be in PNG format.
+                // Telegram exports JPEGs, so we convert it via a temporary Canvas.
+                const img = new Image();
+                img.src = URL.createObjectURL(blob);
+                await new Promise(resolve => img.onload = resolve);
+                
+                const canvas = document.createElement('canvas');
+                canvas.width = img.width;
+                canvas.height = img.height;
+                const ctx = canvas.getContext('2d');
+                ctx.drawImage(img, 0, 0);
+                
+                const pngBlob = await new Promise(resolve => canvas.toBlob(resolve, 'image/png'));
+                
+                await navigator.clipboard.write([
+                    new ClipboardItem({ 'image/png': pngBlob })
+                ]);
+            } catch (e) {
+                console.error("Failed to copy image: ", e);
+                alert("Could not copy image. (Clipboard API requires localhost or HTTPS)");
+            }
+        }
+		
+		function startSelection() {
+            selectionMode = true;
+            toggleSelection(rightClickedMsgId);
+            document.getElementById('selection-bar').style.display = 'flex';
+        }
+
+        function toggleSelection(rowId) {
+            const numericId = parseInt(rowId.replace('msg-', ''));
+            setSelectionState(rowId, !selectedIds.has(numericId));
+        }
+		
+       function setSelectionState(rowId, state) {
+            const row = document.getElementById(rowId);
+            if (!row) return;
+            const numericId = parseInt(rowId.replace('msg-', ''));
+            
+            if (state) {
+                selectedIds.add(numericId);
+                row.classList.add('selected');
+            } else {
+                selectedIds.delete(numericId);
+                row.classList.remove('selected');
+            }
+            document.getElementById('sel-count').innerText = selectedIds.size;
+            
+            // Exit selection mode if 0 messages are selected
+            if (selectedIds.size === 0) clearSelection();
+        }
+		
+        function selectUntilHere() {
+            document.getElementById('context-menu').style.display = 'none';
+            if (!rightClickedMsgId || selectedIds.size === 0) return;
+            
+            const targetIdNum = parseInt(rightClickedMsgId.replace('msg-', ''));
+            
+            // Find the nearest ID that is already selected
+            const sortedSelected = Array.from(selectedIds).sort((a, b) => a - b);
+            const nearestIdNum = sortedSelected.reduce((prev, curr) => 
+                Math.abs(curr - targetIdNum) < Math.abs(prev - targetIdNum) ? curr : prev
+            );
+            
+            // Iterate through the DOM to select everything in between
+            const msgRows = Array.from(chat.querySelectorAll('.msg-row'));
+            let inRange = false;
+            
+            for (let row of msgRows) {
+                const rowIdNum = parseInt(row.id.replace('msg-', ''));
+                
+                if (rowIdNum === targetIdNum || rowIdNum === nearestIdNum) {
+                    if (!inRange) {
+                        inRange = true; // Start selecting
+                        setSelectionState(row.id, true);
+                        continue;
+                    } else {
+                        setSelectionState(row.id, true); // Select the final boundary
+                        break; // Stop loop, we're done
+                    }
+                }
+                
+                if (inRange) {
+                    setSelectionState(row.id, true);
+                }
+            }
+        }
+
+        function clearSelection() {
+            selectionMode = false;
+            selectedIds.clear();
+            document.querySelectorAll('.msg-row.selected').forEach(el => el.classList.remove('selected'));
+            document.getElementById('selection-bar').style.display = 'none';
+        }
+
+        function copySelected() {
+            if (selectedIds.size === 0) return;
+            const sortedIds = Array.from(selectedIds).sort((a, b) => a - b);
+            
+            let copyText = "";
+            sortedIds.forEach(id => {
+                const msg = messageDataStore[id];
+                if (msg) {
+                    // Strip HTML tags for clipboard
+                    let rawText = msg.text_content || "";
+                    if (rawText) {
+                        const temp = document.createElement("div");
+                        temp.innerHTML = rawText;
+                        rawText = temp.innerText;
+                    }
+                    
+                    const mediaLabel = msg.media_type ? `[${msg.media_type.toUpperCase()}] ` : '';
+                    copyText += `[${msg.timestamp}] ${msg.sender}: ${mediaLabel}${rawText}\n`;
+                }
+            });
+
+            navigator.clipboard.writeText(copyText.trim()).then(() => {
+                const btn = document.getElementById('copy-btn');
+                btn.innerText = "✅ Copied!";
+                setTimeout(() => { btn.innerText = "📋 Copy"; }, 1000);
+            });
+        }
+
+        function formatTime(seconds) {
+            if (isNaN(seconds)) return "0:00";
+            const m = Math.floor(seconds / 60);
+            const s = Math.floor(seconds % 60).toString().padStart(2, '0');
+            return `${m}:${s}`;
+        }
+		
+		window.ShowSpoiler = function(el) { el.classList.add('revealed'); };
+		function formatMessageText(text) {
+            if (!text) return '';
+            
+            // 1. Force Telegram's native HTML links to open in a new tab and use the context menu
+            let formatted = text.replace(/<a([^>]*)href="([^"]+)"([^>]*)>/gi, function(match, p1, p2, p3) {
+                if (match.includes('chat-link')) return match; // Skip if already formatted
+                return `<a${p1}href="${p2}" target="_blank" class="chat-link"${p3}>`;
+            });
+            
+            // 2. Safely auto-link raw URLs that are not part of an HTML tag
+            try {
+                const urlRegex = /(?<!href="|href='|>)(https?:\/\/[^\s<]+)/g;
+                formatted = formatted.replace(urlRegex, '<a href="$1" target="_blank" class="chat-link">$1</a>');
+            } catch(e) {}
+            
+            return formatted;
+        }
+
+        function playGlobalMedia(path, type, msgId = null) {
+            if (currentPlayingPath === path) { togglePlay(); return; }
+
+            // Stop previously playing round video
+            if (currentPlayingType === 'round_video' && currentPlayingMsgId) {
+                const oldRv = document.getElementById(`rv-${currentPlayingMsgId}`);
+                const oldPlayBtn = document.getElementById(`rv-play-${currentPlayingMsgId}`);
+                if (oldRv) oldRv.pause();
+                if (oldPlayBtn) oldPlayBtn.style.display = 'flex';
+            }
+
+            currentPlayingPath = path; 
+            currentPlayingMsgId = msgId;
+            currentPlayingType = type;
+            
+            const safePath = encodeURIComponent(path);
+            engine.src = `/media?path=${safePath}`;
+            playerBar.style.display = 'flex';
+            engine.playbackRate = speeds[currentSpeedIdx];
+            engine.play();
+            playPauseBtn.innerText = "⏸";
+            
+            vidPreview.style.display = 'none'; // Keep player panel clean
+			
+			// Trigger auto-generation on first listen
+            if (type === 'voice' && msgId && waveSetting.checked) {
+                const msg = messageDataStore[msgId];
+                if (msg && !msg.waveform) {
+                    processRealWaveform(msg.media_path, msgId);
+                }
+            }
+
+            if (type === 'round_video' && msgId) {
+                const rv = document.getElementById(`rv-${msgId}`);
+                const playBtn = document.getElementById(`rv-play-${msgId}`);
+                if (rv) { rv.currentTime = 0; rv.play(); }
+                if (playBtn) { playBtn.style.display = 'none'; }
+            }
+        }
+        
+        // 1. Timeupdate: Acts as a fallback and handles seeking while paused
+        engine.addEventListener('timeupdate', updatePlaybackUI);
+
+        // 2. Pause: Stop animation and update icons
+        engine.addEventListener('pause', () => {
+            stopSmoothAnimation();
+            playPauseBtn.innerText = "▶";
+            
+            if (currentPlayingType === 'round_video' && currentPlayingMsgId) {
+                const rv = document.getElementById(`rv-${currentPlayingMsgId}`);
+                if (rv) rv.pause();
+                const wrapper = document.getElementById(`rv-wrap-${currentPlayingMsgId}`);
+                if (wrapper) wrapper.classList.remove('playing');
+            }
+            
+            if (currentPlayingType === 'voice' && currentPlayingMsgId) {
+                const btn = document.getElementById(`vp-btn-${currentPlayingMsgId}`);
+                if (btn) btn.innerText = "▶";
+                const menuBtn = document.getElementById(`media-menu-vp-btn-${currentPlayingMsgId}`);
+                if (menuBtn) menuBtn.innerText = "▶ Play";
+            }
+        });
+        
+        // 3. Play: Start smooth animation loop and update icons
+        engine.addEventListener('play', () => {
+            startSmoothAnimation(); // <--- This triggers the 60FPS updates
+            playPauseBtn.innerText = "⏸";
+            
+            // Reset all voice buttons visually
+            document.querySelectorAll('.vp-btn').forEach(b => b.innerText = '▶');
+            document.querySelectorAll('[id^="media-menu-vp-btn-"]').forEach(b => b.innerText = '▶ Play');
+            
+            if (currentPlayingType === 'round_video' && currentPlayingMsgId) {
+                const rv = document.getElementById(`rv-${currentPlayingMsgId}`);
+                if (rv) rv.play();
+                const wrapper = document.getElementById(`rv-wrap-${currentPlayingMsgId}`);
+                if (wrapper) wrapper.classList.add('playing');
+            }
+            
+            if (currentPlayingType === 'voice' && currentPlayingMsgId) {
+                const btn = document.getElementById(`vp-btn-${currentPlayingMsgId}`);
+                if (btn) btn.innerText = "⏸";
+                const menuBtn = document.getElementById(`media-menu-vp-btn-${currentPlayingMsgId}`);
+                if (menuBtn) menuBtn.innerText = "⏸ Paused";
+            }
+        });
+        
+        // 4. Ended: Clean stop
+        engine.addEventListener('ended', () => {
+            stopSmoothAnimation();
+            playPauseBtn.innerText = "▶";
+        });
+		
+        function jumpToPlaying() {
+            if (currentPlayingMsgId) jumpToContext(currentPlayingMsgId);
+        }
+
+        function togglePlay() {
+            if (engine.paused) { engine.play(); vidPreview.play(); playPauseBtn.innerText = "⏸"; } 
+            else { engine.pause(); vidPreview.pause(); playPauseBtn.innerText = "▶"; }
+        }
+
+        function closePlayer() { engine.pause(); vidPreview.pause(); playerBar.style.display = 'none'; }
+        
+        function cycleSpeed() {
+            currentSpeedIdx = (currentSpeedIdx + 1) % speeds.length;
+            engine.playbackRate = speeds[currentSpeedIdx];
+            if(vidPreview.style.display === 'block') vidPreview.playbackRate = speeds[currentSpeedIdx];
+            speedBtn.innerText = speeds[currentSpeedIdx] + "x";
+        }
+
+		
+		// --- SEEK BAR DRAG TRACKING ---
+        let isDraggingSeekBar = false;
+        seekBar.addEventListener('mousedown', () => isDraggingSeekBar = true);
+        seekBar.addEventListener('touchstart', () => isDraggingSeekBar = true, {passive: true});
+        seekBar.addEventListener('mouseup', () => isDraggingSeekBar = false);
+        seekBar.addEventListener('touchend', () => isDraggingSeekBar = false);
+        
+        seekBar.addEventListener('input', (e) => { 
+            if (engine.duration) {
+                engine.currentTime = engine.duration * (e.target.value / 100);
+            }
+        });
+        engine.addEventListener('ended', () => { playPauseBtn.innerText = "▶"; });
+		
+		function formatDateText(dateString) {
+            // dateString is "YYYY-MM-DD"
+            if (!dateString) return '';
+            const date = new Date(dateString);
+            const now = new Date();
+            
+            const options = { day: 'numeric', month: 'long' };
+            
+            // If the message year is different from the current year, add the year to the label
+            if (date.getFullYear() !== now.getFullYear()) {
+                options.year = 'numeric';
+            }
+            
+            // Using 'uk-UA' or 'en-GB' for "Day Month Year" format instead of "Month Day"
+            return date.toLocaleDateString('uk-UA', options); 
+        }
+
+        // --- RENDER LOGIC ---
+        function renderMessages(messages, prepend = false) {
+            let html = '';
+            let lastSender = prepend && chat.firstElementChild ? chat.firstElementChild.dataset.sender : null;
+            let lastRenderedDate = null;
+
+            let oldTopDivider = null;
+            let oldTopDate = null;
+
+            if (prepend && chat.firstElementChild) {
+                const firstMsg = chat.querySelector('.msg-row');
+                if (firstMsg) {
+                    oldTopDate = firstMsg.dataset.date;
+                    const prevEl = firstMsg.previousElementSibling;
+                    if (prevEl && prevEl.classList.contains('date-divider')) oldTopDivider = prevEl;
+                }
+            }
+
+            if (!prepend) {
+                const lastRow = Array.from(chat.children).reverse().find(el => el.classList.contains('msg-row'));
+                if (lastRow) {
+                    lastRenderedDate = lastRow.dataset.date;
+                    lastSender = lastRow.dataset.sender;
+                } else { lastSender = null; }
+            }
+
+            messages.forEach(msg => {
+                messageDataStore[msg.id] = msg; // Save to store
+                
+                let timeStr = ""; let dateOnly = "";
+                if (msg.timestamp) {
+                    const parts = msg.timestamp.split(' ');
+                    dateOnly = parts[0]; 
+                    if(parts.length > 1) timeStr = `${parts[1].split(':')[0]}:${parts[1].split(':')[1]}`;
+                }
+
+                if (msg.media_type === 'service' | msg.media_type === 'service_photo') {
+                    // Update the lastRenderedDate so the next normal message doesn't duplicate the date header
+                    if (dateOnly !== lastRenderedDate) {
+                        html += `<div class="date-divider"><span>${formatDateText(dateOnly)}</span></div>`;
+                        lastRenderedDate = dateOnly;
+                        lastSender = null; 
+                    }
+					
+					let extraHtml = '';
+                    if (msg.media_type === 'service_photo' && msg.media_path) {
+                        const safePath = `/media?path=${encodeURIComponent(msg.media_path)}`;
+                        extraHtml = `<img class="service-photo-preview" src="${safePath}" onclick="window.open('${safePath}','_blank')">`;
+                    }
+					let sysText = msg.text_content.replace('this message', '<span style="cursor:pointer;border-bottom:1px dashed white" onclick="jumpToCurrentPinned()">this message</span>');
+                    html += `<div class="system-msg" id="msg-${msg.id}" data-date="${dateOnly}" data-timestamp="${msg.timestamp}">
+                                ${sysText}
+                                ${extraHtml}
+                             </div>`;
+                    lastSender = null; // Reset sender grouping after a system message
+                    return; // Skip the rest of the loop for this item
+                }
+
+                if (dateOnly !== lastRenderedDate) {
+                    html += `<div class="date-divider"><span>${formatDateText(dateOnly)}</span></div>`;
+                    lastRenderedDate = dateOnly;
+                    lastSender = null; 
+                }
+
+                const showHeader = msg.sender !== lastSender;
+                lastSender = msg.sender;
+                const avatarUrl = `/avatar/${encodeURIComponent(msg.sender)}`;
+                
+                // PREPARE CONTENT
+                let mediaHtml = '';
+				let textToRender = formatMessageText(msg.text_content);
+                let isSpoilerMedia = textToRender.trim() === 'spoiler image';
+                if (isSpoilerMedia) textToRender = ''; // Hide text if it's just a marker
+				
+                // --- CONTACTS & CALLS (SAFE VERSION) ---
+                if (msg.media_type === 'contact') {
+                    // Safe split: use (msg.text_content || "") to prevent null crash
+                    const parts = (msg.text_content || "").split('|');
+                    const cName = parts[0] || "Unknown";
+                    const cPhone = parts[1] || "";
+                    const phoneClean = cPhone.replace(/[^\d+]/g, '');
+                    
+                    mediaHtml = `
+                        <div class="reply-block" style="background:rgba(0,0,0,0.2); cursor:default; padding:10px;">
+                            <img src="/avatar/${encodeURIComponent(cName)}" style="width:40px;height:40px;border-radius:50%;margin-right:10px;">
+                            <div style="flex-grow:1; overflow:hidden;">
+                                <div style="font-weight:bold;">${cName}</div>
+                                <div style="color:var(--accent);margin-bottom:5px;">${cPhone}</div>
+                                <button class="play-btn-inline" style="width:100%; justify-content:center;" onclick="window.open('https://t.me/${phoneClean}', '_blank')">Write to contact</button>
+                            </div>
+                        </div>`;
+                    textToRender = '';
+                } 
+                else if (msg.media_type === 'call') {
+                    const parts = msg.text_content.split('|');
+                    const cTitle = parts[0] || "Call";
+                    const cStatus = parts[1] || "";
+                    const isSucc = parts[2] === 'True';
+                    
+                    const icon = isSucc ? '📞' : '❌';
+                    const color = isSucc ? 'var(--text-main)' : '#e17076';
+                    mediaHtml = `
+                        <div class="reply-block" style="background:rgba(0,0,0,0.2); cursor:default; padding:10px; color:${color};">
+                            <div style="font-size: 24px; margin-right: 10px;">${icon}</div>
+                            <div>
+                                <div style="font-weight:bold;">${cTitle}</div>
+                                <div style="font-size:12px;">${cStatus}</div>
+                            </div>
+                        </div>`;
+                    textToRender = '';
+                }
+				// --- POLLS ---
+                else if (msg.media_type === 'poll') {
+                    try {
+                        const pollData = JSON.parse(msg.text_content);
+                        let optionsHtml = '';
+                        
+                        // Calculate total votes manually if needed, or use stored total
+                        let maxVotes = 0;
+                        pollData.options.forEach(opt => maxVotes += opt.count);
+                        if (maxVotes === 0) maxVotes = 1; // Avoid divide by zero
+
+                        pollData.options.forEach(opt => {
+                            const percent = Math.round((opt.count / maxVotes) * 100);
+                            const isChosen = opt.chosen ? 'winner' : '';
+                            const checkmark = opt.chosen ? '✔ ' : '';
+                            
+                            optionsHtml += `
+                                <div class="poll-option">
+                                    <div class="poll-bar-bg">
+                                        <div class="poll-bar-fill ${isChosen}" style="width: ${percent}%"></div>
+                                    </div>
+                                    <div class="poll-text-overlay">
+                                        <span>${checkmark}${opt.text}</span>
+                                        <span>${percent}%</span>
+                                    </div>
+                                </div>`;
+                        });
+
+                        mediaHtml = `
+                            <div class="poll-container">
+                                <div class="poll-question">${pollData.question}</div>
+                                <div class="poll-meta">${pollData.type} • ${pollData.total}</div>
+                                ${optionsHtml}
+                            </div>`;
+                        textToRender = ''; // Don't show JSON text
+                    } catch(e) { textToRender = "Error parsing poll"; }
+                }
+                
+                // --- LOCATIONS ---
+                else if (msg.media_type === 'location') {
+                    const [coords, link] = msg.text_content.split('|');
+                    mediaHtml = `
+                        <div class="location-card" onclick="window.open('${link}', '_blank')">
+                            <div class="location-map">📍</div>
+                            <div class="location-info">
+                                <div style="font-weight:bold; color:var(--text-main);">Location</div>
+                                <div style="color:var(--accent); font-size:13px;">${coords}</div>
+                            </div>
+                        </div>`;
+                    textToRender = '';
+                }
+                else if (msg.media_path) {
+                    const sCls = isSpoilerMedia ? 'spoiler' : '';
+                    const safePath = encodeURIComponent(msg.media_path);
+                    const url = `/media?path=${safePath}`;
+                    const isAudioFile = msg.media_type === 'audio' || msg.media_path.toLowerCase().endsWith('.mp3');
+	
+					
+					if (msg.media_type === 'photo') {
+                        // If spoiled: First click reveals. Second click opens.
+                        if (isSpoilerMedia) {
+                            mediaHtml = `<img class="media-photo spoiler" src="${url}" onclick="if(this.classList.contains('revealed')){ window.open('${url}','_blank') } else { this.classList.add('revealed') }">`;
+                        } else {
+                            mediaHtml = `<img class="media-photo" src="${url}" onclick="window.open('${url}','_blank')">`;
+                        }
+                    }
+                    else if (msg.media_type === 'gif') mediaHtml = `<video src="${url}" autoplay loop muted playsinline class="media-gif ${sCls}" ${isSpoilerMedia ? "onclick=\"this.classList.add('revealed')\"" : ""}></video>`;
+                    else if (msg.media_type === 'sticker') mediaHtml = `<img class="media-sticker" src="${url}">`;
+                    else if (msg.media_type === 'video') mediaHtml = `<video src="${url}" controls class="media-photo ${sCls}"></video>`;
+                    else if (msg.media_type === 'round_video') {
+                        mediaHtml = `<div class="round-video-wrapper" id="rv-wrap-${msg.id}" onclick="playGlobalMedia('${msg.media_path.replace(/\\/g, '\\\\')}', 'round_video', ${msg.id})">
+                                        <video id="rv-${msg.id}" src="${url}#t=0.1" preload="metadata" class="round-video-embed" muted></video>
+                                        <div class="play-overlay" id="rv-play-${msg.id}">▶</div>
+                                     </div>`;
+                    } 
+                    else if (msg.media_type === 'voice' || isAudioFile) {
+                        const icon = isAudioFile ? '🎵 Audio File' : '🎤 Voice Message';
+                        mediaHtml = `
+                            <div class="voice-player">
+                                <button class="vp-btn" id="vp-btn-${msg.id}" onclick="playGlobalMedia('${msg.media_path.replace(/\\/g, '\\\\')}', 'voice', ${msg.id})">▶</button>
+                                <div class="vp-waveform-container" onclick="seekVoice(event, ${msg.id})">
+                                    <canvas id="vp-canvas-${msg.id}" class="vp-canvas-uninit" width="160" height="30"></canvas>
+                                </div>
+                                <div class="vp-time" id="vp-time-${msg.id}">--:--</div>
+                                <audio src="${url}" preload="metadata" onloadedmetadata="document.getElementById('vp-time-${msg.id}').innerText = formatTime(this.duration)"></audio>
+                            </div>`;
+                    } else { 
+                        mediaHtml = `<a href="${url}" target="_blank" class="media-file">📄 Open File</a>`; 
+                    }
+                }
+
+                // --- REPLY BLOCK GENERATION ---
+                let replyHtml = '';
+                if (msg.reply_to_id) {
+                    let rText = formatMessageText(msg.reply_text) || "";
+                    let rMediaLabel = "";
+                    let rThumbHtml = "";
+
+                    // Determine media labels and thumbnails
+                    if (msg.reply_media_type === 'photo') { 
+                        rMediaLabel = "Photo"; 
+                        if(msg.reply_media_path) rThumbHtml = `<img src="/media?path=${encodeURIComponent(msg.reply_media_path)}" class="reply-thumb">`; 
+                    }
+                    else if (msg.reply_media_type === 'round_video') { 
+                        rMediaLabel = "Video Message"; 
+                        if(msg.reply_media_path) rThumbHtml = `<video src="/media?path=${encodeURIComponent(msg.reply_media_path)}#t=0.1" class="reply-thumb" muted></video>`; 
+                    }
+                    else if (msg.reply_media_type === 'video') rMediaLabel = "Video";
+                    else if (msg.reply_media_type === 'voice') rMediaLabel = "Voice Message";
+                    else if (msg.reply_media_type === 'gif') rMediaLabel = "GIF";
+                    else if (msg.reply_media_type === 'file' || msg.reply_media_type === 'audio') {
+                        rMediaLabel = "File";
+                        if (msg.reply_media_path) rText = msg.reply_media_path.split(/[\\/]/).pop();
+                    }
+
+                    // Apply blue styling to media labels
+                    if (rMediaLabel) {
+                        rText = `<span class="search-media-label">${rMediaLabel}</span> ${rText}`;
+                    }
+
+                    replyHtml = `
+                        <div class="reply-block" onclick="jumpToContext(${msg.reply_to_id})">
+                            ${rThumbHtml}
+                            <div class="reply-content">
+                                <div class="reply-sender">${msg.reply_sender || "Unknown"}</div>
+                                <div class="reply-text">${rText}</div>
+                            </div>
+                        </div>`;
+                }
+				
+				// 6. BUILD FINAL HTML
+                const pinDot = msg.is_pinned ? `<div class="pin-indicator" title="Pinned Message"></div>` : '';
+                
+                // Determine if bubble should be frameless (Stickers/GIFs with no text and no reply)
+                const isFrameless = (msg.media_type === 'sticker' || msg.media_type === 'gif') && !textToRender && !msg.reply_to_id;
+                const bubbleClass = isFrameless ? "bubble frameless" : "bubble";
+
+                html += `
+                    <div class="msg-row" id="msg-${msg.id}" data-date="${dateOnly}" data-sender="${msg.sender}" data-timestamp="${msg.timestamp}">
+                        ${showHeader ? `<img class="avatar" src="${avatarUrl}">` : `<div style="width: 54px;"></div>`}
+                        <div class="${bubbleClass}">
+                            ${pinDot}
+                            ${showHeader ? `<div class="sender" style="color: ${getColor(msg.sender)};">${msg.sender}</div>` : ''}
+                            ${typeof replyHtml !== 'undefined' ? replyHtml : ''}
+                            ${mediaHtml}
+                            ${textToRender ? `<div class="text">${textToRender} <span class="time">${timeStr}</span></div>` : (isFrameless ? `<span class="time">${timeStr}</span>` : '')}
+                        </div>
+                    </div>`;
+            });
+
+            // 7. INSERTION LOGIC
+            if (prepend) {
+                const oldHeight = chat.scrollHeight;
+                const oldScrollTop = chat.scrollTop; 
+                chat.insertAdjacentHTML('afterbegin', html);
+                chat.scrollTop = oldScrollTop + (chat.scrollHeight - oldHeight);
+
+                if (oldTopDivider && messages.length > 0) {
+                    const lastMsgInNewBatch = messages[messages.length - 1];
+                    let lastMsgDate = "";
+                    if(lastMsgInNewBatch.timestamp) lastMsgDate = lastMsgInNewBatch.timestamp.split(' ')[0];
+                    if (lastMsgDate === oldTopDate) oldTopDivider.remove();
+                }
+            } else {
+                chat.insertAdjacentHTML('beforeend', html);
+            }
+
+            // INITIALIZE WAVEFORMS & PIN STATE
+            setTimeout(() => {
+                chat.querySelectorAll('canvas.vp-canvas-uninit').forEach(canvas => {
+                    canvas.classList.remove('vp-canvas-uninit');
+                    const id = parseInt(canvas.id.replace('vp-canvas-', ''));
+                    const msg = messageDataStore[id];
+                    drawWaveform(canvas, id, 0, msg ? msg.waveform : null); 
+                });
+                syncPlayingUI();
+                updatePinnedBar(); // Ensure bar updates when content loads
+            }, 50);
+        }
+
+        // --- FETCH & SCROLL LOGIC ---
+        let oldestMsgId = null;
+        let newestMsgId = null;
+        let isFetching = false;
+        let allOldLoaded = false;
+        let allNewLoaded = true;
+		
+		function syncPlayingUI() {
+            if (!currentPlayingMsgId) return;
+            const isPaused = engine.paused;
+            
+            if (currentPlayingType === 'round_video') {
+                const rv = document.getElementById(`rv-${currentPlayingMsgId}`);
+                const wrapper = document.getElementById(`rv-wrap-${currentPlayingMsgId}`);
+                if (rv) { rv.currentTime = engine.currentTime; if (!isPaused) rv.play(); }
+                if (wrapper) { if (!isPaused) wrapper.classList.add('playing'); }
+            }
+            
+            if (currentPlayingType === 'voice') {
+                const btn = document.getElementById(`vp-btn-${currentPlayingMsgId}`);
+                if (btn) btn.innerText = isPaused ? "▶" : "⏸";
+                
+                const canvas = document.getElementById(`vp-canvas-${currentPlayingMsgId}`);
+                if (canvas) {
+                    const prog = engine.duration ? (engine.currentTime / engine.duration) : 0;
+                    drawWaveform(canvas, currentPlayingMsgId, prog);
+                }
+            }
+        }
+
+        async function loadInitial() {
+            chat.innerHTML = '';
+            const res = await fetch('/api/messages');
+            const messages = await res.json();
+            if (messages.length > 0) {
+                oldestMsgId = messages[0].id;
+                newestMsgId = messages[messages.length - 1].id;
+                allOldLoaded = false;
+                allNewLoaded = true;
+                renderMessages(messages);
+                chat.scrollTop = chat.scrollHeight;
+            } else {
+                document.getElementById('date-pill').innerText = "No messages";
+            }
+        }
+
+        async function loadOlder() {
+            if (isFetching || allOldLoaded || !oldestMsgId) return;
+            isFetching = true;
+            const res = await fetch(`/api/messages?before_id=${oldestMsgId}`);
+            const messages = await res.json();
+            if (messages.length === 0) allOldLoaded = true;
+            else { oldestMsgId = messages[0].id; renderMessages(messages, true); }
+            isFetching = false;
+        }
+
+        async function loadNewer() {
+            if (isFetching || allNewLoaded || !newestMsgId) return;
+            isFetching = true;
+            const res = await fetch(`/api/messages?after_id=${newestMsgId}`);
+            const messages = await res.json();
+            if (messages.length === 0) allNewLoaded = true;
+            else { newestMsgId = messages[messages.length - 1].id; renderMessages(messages, false); }
+            isFetching = false;
+        }
+		
+		function escapeRegExp(string) {
+            return string.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+        }
+
+        // --- HELPER: Handles the scrolling, pulsing, and keyword highlighting ---
+        function applyJumpEffects(target, highlightKeyword) {
+            target.scrollIntoView({ behavior: 'smooth', block: 'center' }); 
+            
+            // Force animation restart for the dialogue highlight
+            const bubble = target.querySelector('.bubble');
+            if (bubble) {
+                bubble.style.animation = "none";
+                void bubble.offsetWidth; // Trigger reflow
+                bubble.style.animation = "pulse 1.5s ease"; 
+            }
+
+            // Apply keyword highlight if jumping from Search
+            if (highlightKeyword) {
+                const textArea = target.querySelector('.text');
+                if (textArea) {
+                    const originalText = textArea.innerHTML;
+                    const safeKeyword = escapeRegExp(highlightKeyword);
+                    const regex = new RegExp(`(${safeKeyword})`, 'gi');
+                    textArea.innerHTML = originalText.replace(regex, '<span class="highlight-match">$1</span>');
+                    setTimeout(() => { if(textArea) textArea.innerHTML = originalText; }, 3000);
+                }
+            }
+        }
+
+        async function jumpToContext(id, highlightKeyword = null, clickedSearchItem = null) {
+            // 1. Handle sidebars active styling
+            if (clickedSearchItem) {
+                document.querySelectorAll('.search-item, .media-grid-item, .media-list-item').forEach(el => el.classList.remove('active'));
+                clickedSearchItem.classList.add('active');
+                // Scroll the sidebar itself so the clicked item is visible
+                clickedSearchItem.scrollIntoView({ behavior: 'smooth', block: 'center' });
+            }
+
+            // 2. OPTIMIZATION: Is the message already loaded?
+            const existingTarget = document.getElementById(`msg-${id}`);
+            if (existingTarget) {
+                // It's already here! Just scroll to it instantly and exit.
+                applyJumpEffects(existingTarget, highlightKeyword);
+                return; 
+            }
+
+            // 3. Not loaded. Fetch context from the server.
+            isFetching = true; 
+            chat.innerHTML = '<div style="text-align:center; padding: 20px;">Loading context...</div>';
+            
+            const res = await fetch(`/api/messages?around_id=${id}`);
+            const messages = await res.json();
+            chat.innerHTML = ''; 
+            
+            if (messages.length > 0) {
+                oldestMsgId = messages[0].id; 
+                newestMsgId = messages[messages.length - 1].id;
+                allOldLoaded = false; 
+                allNewLoaded = false; 
+                
+                renderMessages(messages);
+                
+                // Wait for the DOM to render the new messages, then jump
+                setTimeout(() => {
+                    const target = document.getElementById(`msg-${id}`);
+                    if (target) { 
+                        applyJumpEffects(target, highlightKeyword);
+                    }
+                    setTimeout(() => { isFetching = false; }, 500);
+                }, 100);
+            } else {
+                isFetching = false;
+            }
+            
+            // Show the "Scroll to Bottom" arrow since we are definitely in the past
+            document.getElementById('btn-down').style.display = 'flex';
+        }
+
+        function jumpToBottom() { loadInitial(); document.getElementById('btn-down').style.display = 'none'; }
+
+        chat.addEventListener('scroll', () => {
+            // Increased threshold from 150 to 1500 to load messages much earlier
+            if (chat.scrollTop < 1500) loadOlder();
+            if (chat.scrollHeight - chat.scrollTop <= chat.clientHeight + 1500) loadNewer();
+
+            // Calculate if we should hide the down arrow
+            document.getElementById('btn-down').style.display = (allNewLoaded && chat.scrollHeight - chat.scrollTop <= chat.clientHeight + 100) ? 'none' : 'flex';
+            
+            // Floating date pill logic
+            const elements = document.elementsFromPoint(window.innerWidth / 2, 80);
+            if (elements) {
+                const msgRow = elements.find(el => el.classList && el.classList.contains('msg-row'));
+                if (msgRow) document.getElementById('date-pill').innerText = formatDateText(msgRow.getAttribute('data-date'));
+            }
+			
+			updatePinnedBar(); 
+        });
+
+        // --- CALENDAR & SEARCH LOGIC ---
+        function toggleSearch() { 
+            const sidebar = document.getElementById('sidebar');
+            if (sidebar.classList.contains('open')) {
+                // When closing, reset all fields and highlights
+                document.getElementById('searchInput').value = '';
+                document.getElementById('searchResults').innerHTML = '';
+                document.getElementById('start_date').value = '';
+                document.getElementById('end_date').value = '';
+                document.querySelectorAll('.sender-checkbox').forEach(cb => cb.checked = false);
+            }
+            sidebar.classList.toggle('open'); 
+        }
+		
+		// --- SMART MODAL TOGGLER ---
+        function toggleModal(modalId) {
+            const targetModal = document.getElementById(modalId);
+            const isOpening = targetModal.style.display !== 'block';
+            
+            // Close ALL center modals first
+            document.getElementById('date-modal').style.display = 'none';
+            document.getElementById('settings-modal').style.display = 'none';
+            
+            // If the user clicked a different icon, open its modal
+            if (isOpening) {
+                targetModal.style.display = 'block';
+            }
+        }
+
+        async function executeDateJump() {
+            const dateVal = document.getElementById('jump-date-input').value;
+            if(!dateVal) return;
+            document.getElementById('date-modal').style.display = 'none';
+            const res = await fetch(`/api/jump_date?date=${dateVal}`);
+            if(res.ok) { const data = await res.json(); jumpToContext(data.id); } 
+            else { alert("No messages found on or after this date."); }
+        }
+		
+		let allPinned =[];
+        let currentPinTargetId = null;
+
+		async function loadPinnedData() {
+            try {
+                const res = await fetch('/api/pinned');
+                allPinned = await res.json();
+                if (!Array.isArray(allPinned)) allPinned =[]; // Protect against API errors
+                updatePinnedBar();
+            } catch (e) {
+                console.error("Pinned API not ready.");
+            }
+        }
+
+        function updatePinnedBar() {
+            if (allPinned.length === 0) return;
+            
+            const msgRows = chat.getElementsByClassName('msg-row');
+            if (msgRows.length === 0) return; // Prevent flicker while loading context
+            
+            const bar = document.getElementById('pinned-bar');
+            
+            // 1. Find a reliable timestamp currently in the viewport
+            let currentViewTime = "9999-12-31"; 
+            const chatRect = chat.getBoundingClientRect();
+            
+            // Scan visible rows to find the one closest to the top
+            for (let row of msgRows) {
+                const rect = row.getBoundingClientRect();
+                // If the message is inside the visible chat area
+                if (rect.bottom > chatRect.top && rect.top < chatRect.bottom) {
+                    currentViewTime = row.getAttribute('data-timestamp');
+                    break; 
+                }
+            }
+
+            // 2. Find the most recent pin that happened BEFORE or AT the current view time
+            let activePin = allPinned[0];
+            let activeIdx = 1;
+            
+            // allPinned is ordered oldest to newest. We search backwards.
+            for (let i = allPinned.length - 1; i >= 0; i--) {
+                if (allPinned[i].timestamp <= currentViewTime) {
+                    activePin = allPinned[i];
+                    activeIdx = i + 1;
+                    break;
+                }
+            }
+
+            // 3. FLICKER FIX: Only update the UI if the pin has actually changed!
+            if (currentPinTargetId === activePin.id) return;
+            currentPinTargetId = activePin.id;
+
+            // 4. Render the Bar
+            document.getElementById('pinned-title').innerText = `Pinned Message #${activeIdx}`;
+            
+            const tempDiv = document.createElement('div');
+            tempDiv.innerHTML = activePin.text_content || "";
+            let previewText = tempDiv.innerText || activePin.media_type || "Message";
+            document.getElementById('pinned-text').innerText = previewText;
+
+            const img = document.getElementById('pinned-img');
+            const vid = document.getElementById('pinned-vid');
+            img.style.display = 'none'; vid.style.display = 'none';
+
+            if (activePin.media_path) {
+                const safePath = `/media?path=${encodeURIComponent(activePin.media_path)}`;
+                if (activePin.media_type === 'photo') { img.src = safePath; img.style.display = 'block'; }
+                else if (activePin.media_type === 'round_video') { vid.src = safePath + "#t=0.1"; vid.style.display = 'block'; }
+            }
+            bar.style.display = 'flex';
+        }
+
+        function jumpToCurrentPinned() {
+            if (currentPinTargetId) jumpToContext(currentPinTargetId);
+        }
+
+        // Initialize pins on load
+        loadPinnedData();
+		
+        async function loadSenders() {
+            try {
+                const res = await fetch('/api/senders');
+                const senders = await res.json();
+                const container = document.getElementById('sender-list-container');
+                container.innerHTML = '';
+                
+                if (senders.length === 0) { 
+                    container.innerHTML = '<div style="color:gray; font-size:12px;">No users found.</div>'; 
+                    return; 
+                }
+                
+                // Now 'senders' is an array of objects: {name: "Svyat dy", count: 4500}
+                senders.forEach(s => {
+                    const safeS = s.name.replace(/"/g, '&quot;'); 
+                    container.innerHTML += `
+                        <label class="sender-label">
+                            <input type="checkbox" value="${safeS}" class="sender-checkbox"> 
+                            ${s.name} <span style="color:var(--text-muted); font-size:11px; margin-left:5px;">(${s.count})</span>
+                        </label>
+                    `;
+                });
+            } catch (e) {
+                document.getElementById('sender-list-container').innerHTML = 'Error loading users.';
+            }
+        }
+		
+		let mediaState = { type: 'photo', oldestId: null, isFetching: false, allLoaded: false, currentMonth: "" };
+        function toggleMediaMenu() { 
+            const menu = document.getElementById('media-menu');
+            menu.classList.toggle('open'); 
+            
+            // Sync body class to shift the floating buttons left
+            document.body.classList.toggle('media-open', menu.classList.contains('open')); 
+            
+            if (menu.classList.contains('open') && document.getElementById('media-content').innerHTML === '') {
+                loadMedia('photo', document.querySelector('.media-tab'));
+            }
+        }
+
+        async function loadMedia(type, btnElement = null, append = false) {
+            if (!append) {
+                // Reset State on new tab click
+                mediaState = { type: type, oldestId: null, isFetching: false, allLoaded: false, currentMonth: "" };
+                if (btnElement) {
+                    document.querySelectorAll('.media-tab').forEach(btn => btn.classList.remove('active'));
+                    btnElement.classList.add('active');
+                }
+                document.getElementById('media-content').innerHTML = '<div style="text-align:center; padding:20px;">Loading...</div>';
+            }
+
+            if (mediaState.isFetching || mediaState.allLoaded) return;
+            mediaState.isFetching = true;
+
+            let url = `/api/media_list?type=${mediaState.type}`;
+            if (mediaState.oldestId) url += `&before_id=${mediaState.oldestId}`;
+
+            const res = await fetch(url);
+            const items = await res.json();
+
+            if (items.length === 0) {
+                mediaState.allLoaded = true;
+                if (!append) document.getElementById('media-content').innerHTML = '<div style="text-align:center; color:gray; padding:20px;">No media found.</div>';
+                mediaState.isFetching = false;
+                return;
+            }
+
+            mediaState.oldestId = items[items.length - 1].id;
+            const isGrid = (type === 'photo' || type === 'video' || type === 'gif');
+
+            let html = '';
+            
+            items.forEach(msg => {
+                messageDataStore[msg.id] = msg; 
+                const d = new Date(msg.timestamp.split(' ')[0]);
+                const monthStr = d.toLocaleDateString('en-US', { month: 'long', year: 'numeric' });
+                
+                if (monthStr !== mediaState.currentMonth) {
+                    const gridStyle = isGrid ? 'style="grid-column: 1/-1;"' : '';
+                    html += `<div class="media-month-header" ${gridStyle}>${monthStr}</div>`;
+                    mediaState.currentMonth = monthStr;
+                }
+
+                const mediaUrl = msg.media_path ? `/media?path=${encodeURIComponent(msg.media_path)}` : '';
+                const title = msg.media_path ? msg.media_path.split(/[\\/]/).pop() : "Link";
+                
+                if (type === 'photo') {
+                    html += `<div class="media-grid-item" data-id="${msg.id}" onclick="window.open('${mediaUrl}','_blank')"><img src="${mediaUrl}"></div>`;
+                } else if (type === 'video' || type === 'gif') {
+                    // Start with GIF or a placeholder "--:--" for videos
+                    const badge = type === 'gif' ? 'GIF' : '--:--';
+                    
+                    // Tell the browser to read the video duration automatically once loaded
+                    const onLoadAttr = type === 'video' ? `onloadedmetadata="if(this.duration && this.duration !== Infinity) this.nextElementSibling.innerText = formatTime(this.duration);"` : '';
+
+                    html += `<div class="media-grid-item" data-id="${msg.id}" onclick="window.open('${mediaUrl}','_blank')">
+                                <video src="${mediaUrl}#t=0.1" preload="metadata" muted ${onLoadAttr}></video>
+                                <div class="media-badge">${badge}</div>
+                             </div>`;
+                } else if (type === 'voice') {
+                    const avatarUrl = `/avatar/${encodeURIComponent(msg.sender)}`;
+                    const dateOnly = msg.timestamp.split(' ')[0];
+                    html += `
+                        <div class="media-list-item" data-id="${msg.id}" onclick="playGlobalMedia('${msg.media_path.replace(/\\/g, '\\\\')}', '${msg.media_type}', ${msg.id})">
+                            <img class="media-icon" src="${avatarUrl}" onerror="this.src=''; this.innerText='🎤'">
+                            <div class="media-info">
+                                <div class="media-title">${msg.sender}</div>
+                                <div class="media-sub">${dateOnly} • <span id="media-menu-vp-btn-${msg.id}">▶ Play</span></div>
+                            </div>
+                        </div>`;
+                } else if (type === 'file') {
+                    html += `
+                        <div class="media-list-item" data-id="${msg.id}" onclick="window.open('${mediaUrl}','_blank')">
+                            <div class="media-icon">📄</div>
+                            <div class="media-info">
+                                <div class="media-title">${title}</div>
+                                <div class="media-sub">${msg.file_size || 'Unknown size'} • ${msg.timestamp.split(' ')[0]}</div>
+                            </div>
+                        </div>`;
+                } else if (type === 'link') {
+                    html += `
+                        <div class="media-list-item" data-id="${msg.id}">
+                            <div class="media-icon" style="background: #3b5998;">🔗</div>
+                            <div class="media-info">
+                                <div class="media-title">${formatMessageText(msg.text_content)}</div>
+                                <div class="media-sub">${msg.timestamp.split(' ')[0]}</div>
+                            </div>
+                        </div>`;
+                }
+            });
+
+            const contentDiv = document.getElementById('media-content');
+            if (!append) {
+                // First load: Create the inner container
+                contentDiv.innerHTML = `<div id="media-inner" class="${isGrid ? 'media-grid' : ''}">${html}</div>`;
+            } else {
+                // Append chunk: Add to existing inner container
+                document.getElementById('media-inner').insertAdjacentHTML('beforeend', html);
+            }
+            
+            mediaState.isFetching = false;
+        }
+
+        async function executeSearch() {
+            const q = document.getElementById('searchInput').value;
+            const checkedBoxes = Array.from(document.querySelectorAll('.sender-checkbox:checked'));
+            const user = checkedBoxes.map(cb => cb.value).join(','); 
+            const start = document.getElementById('start_date').value;
+            const end = document.getElementById('end_date').value;
+            const resDiv = document.getElementById('searchResults');
+            
+            if (!q && !user && !start && !end) return;
+            resDiv.innerHTML = "Searching...";
+            
+            const params = new URLSearchParams({ q, sender: user, start, end });
+            const res = await fetch(`/api/search?${params}`);
+            const data = await res.json();
+            
+            if(data.length === 0) { resDiv.innerHTML = "No results."; return; }
+            
+            let html = `<div style="color:var(--text-muted); margin-bottom:10px;">Found ${data.length} results:</div>`;
+            const safeQ = q.replace(/'/g, "\\'"); 
+
+            data.forEach(msg => {
+                // 1. Determine the text label
+                let text = msg.text_content;
+				let isMediaLabel = false;
+				
+                if (!text) {
+                    // If no caption, label it by type
+					isMediaLabel = true;
+                    if (msg.media_type === 'photo') text = "Photo";
+                    else if (msg.media_type === 'video') text = "Video";
+                    else if (msg.media_type === 'round_video') text = "Video Message";
+                    else if (msg.media_type === 'voice') text = "Voice Message";
+                    else if (msg.media_type) text = `${msg.media_type.charAt(0).toUpperCase() + msg.media_type.slice(1)}`;
+                    else text = "Message";
+                }
+				
+				//Smart snippet generation
+				if (q && !isMediaLabel) {
+                    // Find where the match is
+                    const idx = text.toLowerCase().indexOf(q.toLowerCase());
+                    if (idx !== -1) {
+                        const contextChars = 20; // Characters to show before/after
+                        const start = Math.max(0, idx - contextChars);
+                        const end = Math.min(text.length, idx + q.length + contextChars);
+                        
+                        let snippet = text.substring(start, end);
+                        
+                        if (start > 0) snippet = "..." + snippet;
+                        if (end < text.length) snippet = snippet + "...";
+                        
+                        text = snippet;
+                    }
+                }
+
+                // 2. Highlight keyword
+                if (q) text = text.replace(new RegExp(`(${escapeRegExp(q)})`, "gi"), "<mark>$1</mark>");
+                
+				// Apply Blue Color if it is a Media Label
+                if (isMediaLabel) {
+                    text = `<span class="search-media-label">${text}</span>`;
+                }
+				
+                // 3. Generate Thumbnail HTML (if it's a photo)
+                let thumbHtml = '';
+                if (msg.media_type === 'photo' && msg.media_path) {
+                    const thumbUrl = `/media?path=${encodeURIComponent(msg.media_path)}`;
+                    thumbHtml = `<img src="${thumbUrl}" class="search-preview-img">`;
+                }
+
+                // 4. Build the Item HTML
+                html += `
+                    <div class="search-item" onclick="jumpToContext(${msg.id}, '${safeQ}', this)">
+                        <div style="display:flex; justify-content:space-between; margin-bottom:4px;">
+                            <b style="color: ${getColor(msg.sender)}">${msg.sender}</b>
+                            <div class="time">${msg.timestamp.split(' ')[0]}</div>
+                        </div>
+                        <div style="display: flex; align-items: center; color: var(--text-muted);">
+                            ${thumbHtml}
+                            <div style="white-space: nowrap; overflow: hidden; text-overflow: ellipsis;">${text}</div>
+                        </div>
+                    </div>`;
+            });
+            resDiv.innerHTML = html;
+        }
+
+        document.getElementById('searchInput').addEventListener('keypress', e => { if(e.key === 'Enter') executeSearch(); });
+        loadSenders();
+		loadInitial();
