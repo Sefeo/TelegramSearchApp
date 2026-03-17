@@ -245,36 +245,45 @@ if __name__ == "__main__":
 
     # 2. Folder Input Loop
     print("\n--- Telegram Database Builder ---")
+    print("Folders will be linked chronologically in the order you provide them.")
     target_folders = []
     
+    # First mandatory folder
+    example_path = r"C:\Users\Name\Downloads\Telegram Desktop\ChatExport_2024-03-17"
+    print(f"\n1. Insert path to the FIRST Telegram Exported Chat folder (contains messages.html):")
+    print(f"Example: {example_path}")
+    
     while True:
-        example_path = r"C:\Users\Name\Downloads\Telegram Desktop\ChatExport_2024-03-17"
-        print(f"\nInsert path to Telegram Exported Chat folder (contains messages.html):")
-        print(f"Example: {example_path}")
         path = input("Path: ").strip().strip('"').strip("'")
-        
         if not path:
-            if target_folders:
-                break
-            else:
-                print("You must provide at least one folder path.")
-                continue
-
-        # 3. Validation
-        html_exists = os.path.exists(os.path.join(path, "messages.html"))
-        json_exists = os.path.exists(os.path.join(path, "messages.json"))
-
-        if html_exists:
+            print("You must provide at least one folder path.")
+            continue
+            
+        if os.path.exists(os.path.join(path, "messages.html")):
             target_folders.append(path)
             print(f"Added: {path}")
-            
-            more = input("\nAny more folders to link to this one? (Leave empty to proceed): ").strip()
-            if not more:
-                break
-        elif json_exists:
+            break
+        elif os.path.exists(os.path.join(path, "messages.json")):
             print("\n[!] Error: 'messages.json' found. JSON format is not currently supported. Please export as HTML.")
         else:
             print(f"\n[!] Error: Path is incorrect. Could not find 'messages.html' in {path}")
+        print("Please try again.")
+
+    # Subsequent optional folders
+    while True:
+        print(f"\nLink another folder? (Order matters for chronological continuity)")
+        path = input("Path (or leave empty to proceed): ").strip().strip('"').strip("'")
+        
+        if not path:
+            break
+
+        if os.path.exists(os.path.join(path, "messages.html")):
+            target_folders.append(path)
+            print(f"Added: {path}")
+        elif os.path.exists(os.path.join(path, "messages.json")):
+            print("\n[!] Error: 'messages.json' found. JSON format is not supported. Skipping.")
+        else:
+            print(f"\n[!] Error: Path is incorrect. Could not find 'messages.html' in {path}. Skipping.")
 
     # 4. Build Process
     db_connection = setup_database()
