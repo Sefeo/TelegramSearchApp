@@ -13,6 +13,117 @@ let pulseRawMessages = null;  // All messages from /api/pulse_raw (fetched once)
 let pulseRawMeta = null;      // min_date, max_date from the raw endpoint
 let pulseLastMousePos = { x: window.innerWidth / 2, y: window.innerHeight / 2 };
 
+// Web Worker for computation (never freezes the UI)
+let pulseWorker = null;
+let pulseWorkerLoaded = false;  // true once the worker has received the 'load' message
+try {
+    pulseWorker = new Worker('/static/js/pulse_worker.js');
+    pulseWorker.onmessage = function (e) {
+        const { type } = e.data;
+
+        if (type === 'loaded') {
+            // Worker confirmed it has the data — now we can compute
+            pulseWorkerLoaded = true;
+            _triggerCompute();
+            return;
+        }
+
+        if (type === 'result') {
+            pulseData = e.data.stats;
+            // Auto-fill date placeholders
+            const start = document.getElementById('pulse-start-date')?.value || '';
+            const end = document.getElementById('pulse-end-date')?.value || '';
+            if (!start && !end && pulseData.years && pulseData.years.length > 0) {
+                document.getElementById('pulse-start-date').placeholder = pulseData.years[0] + '-01-01';
+                document.getElementById('pulse-end-date').placeholder = pulseData.years[pulseData.years.length - 1] + '-12-31';
+            }
+            renderCharts();
+            hidePulseLoader();
+            return;
+        }
+
+        if (type === 'error') {
+            console.error('Pulse worker error:', e.data.msg);
+            hidePulseLoader();
+        }
+    };
+    pulseWorker.onerror = function (err) {
+        console.error('Pulse worker error:', err);
+        hidePulseLoader();
+    };
+} catch (e) {
+    console.warn('Web Worker not available', e);
+}
+
+// Debounce timer for sender toggles
+let senderDebounceTimer = null;
+
+// ============================================================
+// IndexedDB cache helpers — no 5MB cap, survives browser close
+// ============================================================
+const IDB_NAME = 'PulseCache';
+const IDB_STORE = 'raw';
+const IDB_KEY = 'pulse_raw_v1';
+
+function idbOpen() {
+    return new Promise((resolve, reject) => {
+        const req = indexedDB.open(IDB_NAME, 1);
+        req.onupgradeneeded = e => e.target.result.createObjectStore(IDB_STORE);
+        req.onsuccess = e => resolve(e.target.result);
+        req.onerror = e => reject(e.target.error);
+    });
+}
+
+async function idbGet() {
+    try {
+        const db = await idbOpen();
+        return new Promise((resolve, reject) => {
+            const tx = db.transaction(IDB_STORE, 'readonly');
+            const req = tx.objectStore(IDB_STORE).get(IDB_KEY);
+            req.onsuccess = e => resolve(e.target.result || null);
+            req.onerror = e => reject(e.target.error);
+        });
+    } catch { return null; }
+}
+
+async function idbSet(value) {
+    try {
+        const db = await idbOpen();
+        return new Promise((resolve, reject) => {
+            const tx = db.transaction(IDB_STORE, 'readwrite');
+            const req = tx.objectStore(IDB_STORE).put(value, IDB_KEY);
+            req.onsuccess = () => resolve();
+            req.onerror = e => reject(e.target.error);
+        });
+    } catch { /* ignore write failures */ }
+}
+
+// Send only small filter params to the worker — never the full message array
+function _triggerCompute() {
+    if (!pulseWorker || !pulseWorkerLoaded) return;
+
+    const startDate = document.getElementById('pulse-start-date')?.value || '';
+    const endDate = document.getElementById('pulse-end-date')?.value || '';
+    const phraseInput = document.getElementById('pulse-phrase-len');
+    const maxNGram = phraseInput ? Math.max(1, Math.min(5, parseInt(phraseInput.value) || 1)) : 1;
+    const minInput = document.getElementById('pulse-word-min');
+    const minUsage = minInput ? parseInt(minInput.value) || 5 : 5;
+    const pctInput = document.getElementById('pulse-word-pct');
+    const targetPct = pctInput ? parseInt(pctInput.value) / 100.0 : 0.10;
+
+    showPulseLoader();
+    pulseWorker.postMessage({
+        type: 'compute',
+        senders: Array.from(pulseCurrentSenders),
+        allSendersCount: allSendersList.length,
+        startDate,
+        endDate,
+        maxNGram,
+        minUsage,
+        targetPct
+    });
+}
+
 // Track mouse position for floating loader
 document.addEventListener('mousemove', (e) => {
     pulseLastMousePos.x = e.clientX;
@@ -78,276 +189,58 @@ async function initPulse() {
 
 async function loadRawDataAndRender() {
     showPulseLoader();
+
+    // 1. Try IndexedDB cache first (no 5MB cap, survives browser close)
+    const cached = await idbGet();
+    if (cached) {
+        pulseRawMessages = cached.messages;
+        pulseRawMeta = { min_date: cached.min_date, max_date: cached.max_date };
+        if (pulseMonths.length === 0 && pulseRawMeta.min_date && pulseRawMeta.max_date) {
+            initSlider(pulseRawMeta.min_date, pulseRawMeta.max_date);
+        }
+        // Load messages into worker (once), then compute
+        if (pulseWorker) {
+            pulseWorkerLoaded = false;
+            pulseWorker.postMessage({ type: 'load', messages: pulseRawMessages, meta: pulseRawMeta });
+            // _triggerCompute() is called when worker responds with type:'loaded'
+        }
+        return;
+    }
+
+    // 2. Fetch from server
     try {
         const res = await fetch('/api/pulse_raw');
         const raw = await res.json();
         pulseRawMessages = raw.messages;
         pulseRawMeta = { min_date: raw.min_date, max_date: raw.max_date };
 
-        // Initialize slider data from raw metadata
+        // Persist to IndexedDB for instant re-opens (no quota issues)
+        idbSet(raw); // fire-and-forget
+
+        // Initialize slider
         if (pulseMonths.length === 0 && pulseRawMeta.min_date && pulseRawMeta.max_date) {
             initSlider(pulseRawMeta.min_date, pulseRawMeta.max_date);
         }
 
-        recomputeAndRender();
+        // Load messages into worker (once), then compute
+        if (pulseWorker) {
+            pulseWorkerLoaded = false;
+            pulseWorker.postMessage({ type: 'load', messages: pulseRawMessages, meta: pulseRawMeta });
+            // _triggerCompute() is called when worker responds with type:'loaded'
+        }
     } catch (e) {
         console.error("Error fetching raw pulse data", e);
-    } finally {
         hidePulseLoader();
     }
 }
 
 function recomputeAndRender() {
     if (!pulseRawMessages) return;
-
-    const filtered = filterMessages(pulseRawMessages);
-    pulseData = computePulseStats(filtered);
-
-    // Carry over meta info for date placeholders
-    if (pulseRawMeta) {
-        pulseData.min_date = pulseRawMeta.min_date;
-        pulseData.max_date = pulseRawMeta.max_date;
-        // Compute year range
-        const minY = parseInt(pulseRawMeta.min_date.substring(0, 4));
-        const maxY = parseInt(pulseRawMeta.max_date.substring(0, 4));
-        pulseData.years = [];
-        for (let y = minY; y <= maxY; y++) pulseData.years.push(String(y));
-    }
-
-    // Auto-fill date placeholders
-    const start = document.getElementById('pulse-start-date')?.value || '';
-    const end = document.getElementById('pulse-end-date')?.value || '';
-    if (!start && !end && pulseData.years && pulseData.years.length > 0) {
-        document.getElementById('pulse-start-date').placeholder = pulseData.years[0] + "-01-01";
-        document.getElementById('pulse-end-date').placeholder = pulseData.years[pulseData.years.length - 1] + "-12-31";
-    }
-
-    renderCharts();
+    // Messages are already in the worker — just send filter params
+    _triggerCompute();
 }
 
-function filterMessages(messages) {
-    const isAllSenders = pulseCurrentSenders.size === allSendersList.length;
-    const startDate = document.getElementById('pulse-start-date')?.value || '';
-    const endDate = document.getElementById('pulse-end-date')?.value || '';
-    const startTs = startDate ? startDate + ' 00:00:00' : '';
-    const endTs = endDate ? endDate + ' 23:59:59' : '';
-
-    return messages.filter(msg => {
-        // Filter by sender
-        if (!isAllSenders && !pulseCurrentSenders.has(msg.s)) return false;
-        // Filter by date
-        if (startTs && msg.t < startTs) return false;
-        if (endTs && msg.t > endTs) return false;
-        return true;
-    });
-}
-
-function computePulseStats(messages) {
-    const stats = {};
-
-    // Pre-initialize buckets
-    const hours = {};
-    for (let i = 0; i < 24; i++) hours[i.toString().padStart(2, '0')] = { total: 0, senders: {} };
-
-    const DOW_NAMES = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'];
-    const weekly = {};
-    for (let i = 0; i < 7; i++) weekly[DOW_NAMES[i]] = { total: 0, senders: {} };
-
-    const consistency = {};
-    const mediaCounts = {};
-    const textCount = { total: 0, senders: {} };
-    const senderCounts = {};
-    const emojiPattern = /[\u{1F600}-\u{1F64F}\u{1F300}-\u{1F5FF}\u{1F680}-\u{1F6FF}\u{1F1E0}-\u{1F1FF}\u{2600}-\u{26FF}\u{2700}-\u{27BF}\u{1F900}-\u{1F9FF}\u{1FA70}-\u{1FAFF}]/gu;
-    const emojiCounts = {};
-    const stopWords = new Set(['that', 'this', 'with', 'from', 'your', 'have', 'they', 'will', 'what', 'there', 'would', 'about', 'which', 'when', 'make', 'like', 'time', 'just', 'know', 'take', 'person', 'into', 'year', 'good', 'some', 'could', 'them', 'other', 'than', 'then', 'look', 'only', 'come', 'over', 'think', 'also', 'back', 'after', 'even', 'want', 'because', 'these', 'give', 'most', 'меня', 'тебя', 'тебе', 'мне', 'что', 'как', 'это', 'все', 'так', 'его', 'только', 'было', 'чтобы', 'если', 'уже', 'или', 'нет', 'еще', 'даже', 'быть', 'когда', 'нас', 'для', 'вот', 'вам', 'мы', 'ты', 'вы', 'он', 'она', 'они', 'оно', 'вас', 'их', 'нам', 'им', 'мной', 'тобой', 'нами', 'вами', 'ими', 'href']);
-    const wordPattern = /\p{L}{2,}/gu; // Reduced from 4 to 2 to support phrases
-    let wordCounts = {};
-    const stickerCounts = {};
-    const gifCounts = {};
-    
-    // Read phrase length ONCE before the loop (performance: avoid DOM reads inside tight loop)
-    const phraseInput = document.getElementById('pulse-phrase-len');
-    const maxNGram = phraseInput ? Math.max(1, Math.min(5, parseInt(phraseInput.value) || 1)) : 1;
-
-    // === SINGLE PASS ===
-    for (const msg of messages) {
-        const s = msg.s;
-
-        // Sender count
-        senderCounts[s] = (senderCounts[s] || 0) + 1;
-
-        if (msg.t) {
-            const h = msg.t.substring(11, 13);
-            if (hours[h]) { hours[h].total++; hours[h].senders[s] = (hours[h].senders[s] || 0) + 1; }
-
-            const d = msg.t.substring(0, 10);
-            consistency[d] = (consistency[d] || 0) + 1;
-
-            // Day of week
-            const dow = DOW_NAMES[new Date(d).getDay()];
-            if (weekly[dow]) { weekly[dow].total++; weekly[dow].senders[s] = (weekly[dow].senders[s] || 0) + 1; }
-        }
-
-        // Media DNA
-        if (msg.m) {
-            if (!mediaCounts[msg.m]) mediaCounts[msg.m] = { total: 0, senders: {} };
-            mediaCounts[msg.m].total++;
-            mediaCounts[msg.m].senders[s] = (mediaCounts[msg.m].senders[s] || 0) + 1;
-        } else if (msg.x && msg.x.trim()) {
-            textCount.total++;
-            textCount.senders[s] = (textCount.senders[s] || 0) + 1;
-        }
-
-        // Stickers & GIFs (by size fingerprint)
-        if (msg.m === 'sticker' && msg.p && msg.z) {
-            if (!stickerCounts[msg.z]) stickerCounts[msg.z] = { total: 0, senders: {}, path: msg.p };
-            stickerCounts[msg.z].total++;
-            stickerCounts[msg.z].senders[s] = (stickerCounts[msg.z].senders[s] || 0) + 1;
-        } else if (msg.m === 'gif' && msg.p && msg.z) {
-            if (!gifCounts[msg.z]) gifCounts[msg.z] = { total: 0, senders: {}, path: msg.p };
-            gifCounts[msg.z].total++;
-            gifCounts[msg.z].senders[s] = (gifCounts[msg.z].senders[s] || 0) + 1;
-        }
-
-        // Emojis + words from text
-        if (msg.x) {
-            const foundEmoji = msg.x.match(emojiPattern);
-            if (foundEmoji) {
-                for (const e of foundEmoji) {
-                    if (!emojiCounts[e]) emojiCounts[e] = { total: 0, senders: {} };
-                    emojiCounts[e].total++;
-                    emojiCounts[e].senders[s] = (emojiCounts[e].senders[s] || 0) + 1;
-                }
-            }
-            
-            const cleanText = msg.x.toLowerCase().replace(/http\S+|www\.\S+|<.*?>/g, '');
-            const foundWords = cleanText.match(wordPattern);
-            
-            if (foundWords) {
-                // === PERFORMANCE: Only collect n-gram sizes we actually need ===
-                for (let n = 1; n <= maxNGram; n++) {
-                    if (foundWords.length < n) continue;
-                    const wordLimit = Math.min(foundWords.length, 80);
-                    const seenInThisMessage = new Set();
-                    
-                    // For n>1, use NON-OVERLAPPING stride (step by n) to prevent
-                    // sliding-window variants like "A B C", "B C D", "C D E" from all
-                    // accumulating counts in the same forwarded/repetitive message.
-                    // Unigrams (n=1) still slide by 1 since they can't "overlap".
-                    const step = n > 1 ? n : 1;
-                    
-                    for (let i = 0; i <= wordLimit - n; i += step) {
-                        const chunk = foundWords.slice(i, i + n);
-                        if (n === 1) {
-                            if (stopWords.has(chunk[0]) || chunk[0].length > 20 || chunk[0].length < 4) continue;
-                        }
-                        
-                        const phrase = chunk.join(' ');
-                        if (phrase.length > 70 || seenInThisMessage.has(phrase)) continue;
-                        seenInThisMessage.add(phrase);
-
-                        if (!wordCounts[phrase]) {
-                            wordCounts[phrase] = { total: 0, senders: {}, msgIds: new Set(), len: n };
-                        }
-                        if (!wordCounts[phrase].msgIds.has(msg.i)) {
-                            wordCounts[phrase].msgIds.add(msg.i);
-                            wordCounts[phrase].total++;
-                            wordCounts[phrase].senders[s] = (wordCounts[phrase].senders[s] || 0) + 1;
-                        }
-                    }
-                }
-            }
-        }
-    }
-
-    // === POST-PROCESSING ===
-    
-    // 1. Min Usage Filter (O(N) prune - run first to shrink the working set)
-    const minInput = document.getElementById('pulse-word-min');
-    const minUsage = minInput ? parseInt(minInput.value) || 5 : 5;
-    for (const w of Object.keys(wordCounts)) {
-        if (wordCounts[w].total < minUsage) delete wordCounts[w];
-    }
-
-    // 2. Message-Set Deduplication (Anti-Template Filter)
-    // Phrases that appear in EXACTLY the same set of messages are all fragments
-    // of the same repeated template (e.g. news channel promo footers).
-    // Keep only the highest-frequency phrase per group to surface one clean result.
-    {
-        const templateGroups = new Map(); // fingerprint → [phrase, ...]
-        for (const [phrase, data] of Object.entries(wordCounts)) {
-            // Fingerprint = sorted message IDs joined as string
-            const fp = [...data.msgIds].sort((a, b) => a - b).join(',');
-            if (!templateGroups.has(fp)) templateGroups.set(fp, []);
-            templateGroups.get(fp).push(phrase);
-        }
-        for (const [, group] of templateGroups) {
-            if (group.length <= 1) continue;
-            // Sort group by frequency descending, delete all but the top
-            group.sort((a, b) => wordCounts[b].total - wordCounts[a].total);
-            for (let k = 1; k < group.length; k++) delete wordCounts[group[k]];
-        }
-    }
-
-    // 3. O(N) Subsumption Filtering (Maximal Phrases)
-    const toRemove = new Set();
-    const sortedByLen = Object.keys(wordCounts).sort((a, b) => wordCounts[b].len - wordCounts[a].len);
-    for (const p of sortedByLen) {
-        if (wordCounts[p].len <= 1) continue;
-        const words = p.split(' ');
-        const f1 = words.slice(0, -1).join(' ');
-        const f2 = words.slice(1).join(' ');
-        if (wordCounts[f1] && wordCounts[f1].total < 1.1 * wordCounts[p].total) toRemove.add(f1);
-        if (wordCounts[f2] && wordCounts[f2].total < 1.1 * wordCounts[p].total) toRemove.add(f2);
-    }
-    toRemove.forEach(p => delete wordCounts[p]);
-
-    // Cleanup Set data to free memory
-    for (const w in wordCounts) { delete wordCounts[w].msgIds; }
-
-    // Assign simple stats
-    stats.circadian = hours;
-    stats.weekly = weekly;
-    stats.consistency = consistency;
-    mediaCounts['text'] = textCount;
-    stats.media_dna = mediaCounts;
-    stats.sender_battle = Object.entries(senderCounts).sort((a, b) => b[1] - a[1]).map(([name, count]) => ({ name, count }));
-    stats.emojis = Object.entries(emojiCounts).sort((a, b) => b[1].total - a[1].total).slice(0, 10).map(([emoji, data]) => ({ emoji, count: data.total, senders: data.senders }));
-
-    // 3. Display Filter: strict exact-length match
-    //    (e.g., displayMinLen=1 → show ONLY 1-word phrases)
-    //    If subsumption promoted a longer phrase in its place, it won't appear because
-    //    it's not of the selected length — this is intentional "Phrase Length" behavior.
-    const displayMinLen = maxNGram; // same as the user's selected value (read above)
-    
-    // Apply Percentile Filter
-    const pctInput = document.getElementById('pulse-word-pct');
-    const targetPct = pctInput ? parseInt(pctInput.value) / 100.0 : 0.10;
-    
-    // Only include phrases of the exact selected length
-    let candidates = Object.entries(wordCounts).filter(([, data]) => data.len === displayMinLen);
-
-    if (targetPct < 1.0 && candidates.length > 0) {
-        const sortedCandidates = candidates.sort((a, b) => b[1].total - a[1].total);
-        const totalOccurrences = sortedCandidates.reduce((sum, item) => sum + item[1].total, 0);
-        const cutoffThreshold = totalOccurrences * (1.0 - targetPct);
-        let cumulative = 0;
-        const filtered = [];
-        for (const entry of sortedCandidates) {
-            cumulative += entry[1].total;
-            if (cumulative > cutoffThreshold) filtered.push(entry);
-        }
-        candidates = filtered;
-    }
-    
-    stats.words = candidates.sort((a, b) => b[1].total - a[1].total).slice(0, 15).map(([word, data]) => ({ word, count: data.total, senders: data.senders }));
-
-    // Top stickers & GIFs
-    stats.stickers = Object.values(stickerCounts).sort((a, b) => b.total - a.total).slice(0, 10).map(v => ({ path: '/media?path=' + v.path, name: v.path.split(/[/\\]/).pop(), count: v.total, senders: v.senders }));
-    stats.gifs = Object.values(gifCounts).sort((a, b) => b.total - a.total).slice(0, 10).map(v => ({ path: '/media?path=' + v.path, name: v.path.split(/[/\\]/).pop(), count: v.total, senders: v.senders }));
-
-    return stats;
-}
+// filterMessages and computePulseStats are now in pulse_worker.js (Web Worker)
 
 function initSlider(minDate, maxDate) {
     const firstYear = parseInt(minDate.substring(0, 4));
@@ -440,7 +333,9 @@ function renderSenderToggles() {
                 pulseCurrentSenders.add(s.name);
             }
             updateSenderTogglesUI();
-            recomputeAndRender();
+            // Debounce rapid clicks so we don't re-compute on every single pill toggle
+            clearTimeout(senderDebounceTimer);
+            senderDebounceTimer = setTimeout(() => recomputeAndRender(), 150);
         };
         el.dataset.name = s.name;
         container.appendChild(el);
@@ -630,105 +525,140 @@ function renderCharts() {
     Chart.defaults.color = '#94a3b8';
     Chart.defaults.font.family = "'Segoe UI', Roboto, Helvetica, Arial, sans-serif";
 
-    // 1. Circadian Rhythm (Radar or PolarArea)
+    // 1. Circadian Rhythm (Radar)
     const circCanvas = document.getElementById('circadianChart');
     if (circCanvas) {
-        const circCtx = circCanvas.getContext('2d');
         const cD = pulseData.circadian;
+        const circData = Array.from({ length: 24 }, (_, i) => {
+            let obj = cD[i.toString().padStart(2, '0')];
+            return obj ? obj.total : 0;
+        });
 
-        if (pulseCharts.circadian) pulseCharts.circadian.destroy();
-        pulseCharts.circadian = new Chart(circCtx, {
-            type: 'radar',
-            data: {
-                labels: Array.from({ length: 24 }, (_, i) => i.toString().padStart(2, '0') + ':00'),
-                datasets: [{
-                    label: 'Activity',
-                    data: Array.from({ length: 24 }, (_, i) => {
-                        let obj = cD[i.toString().padStart(2, '0')];
-                        return obj ? obj.total : 0;
-                    }),
-                    backgroundColor: 'rgba(192, 132, 252, 0.2)',
-                    borderColor: '#c084fc',
-                    pointBackgroundColor: '#c084fc',
-                    borderWidth: 2
-                }]
-            },
-            options: {
-                responsive: true,
-                maintainAspectRatio: false,
-                scales: {
-                    r: {
-                        angleLines: { color: 'rgba(255, 255, 255, 0.1)' },
-                        grid: { color: 'rgba(255, 255, 255, 0.1)' },
-                        pointLabels: { color: '#e2e8f0', font: { size: 10 } },
-                        ticks: { display: false }
-                    }
+        if (pulseCharts.circadian) {
+            // Update existing chart — much faster than destroy+recreate
+            pulseCharts.circadian.data.datasets[0].data = circData;
+            // Update tooltip closure reference
+            pulseCharts.circadian.options.plugins.tooltip.callbacks.label = function (context) {
+                let hourKey = context.dataIndex.toString().padStart(2, '0');
+                let hourObj = cD[hourKey];
+                if (!hourObj || !hourObj.total) return `Total: 0`;
+                let lines = [`Total: ${hourObj.total}`];
+                let sorted = Object.entries(hourObj.senders).sort((a, b) => b[1] - a[1]);
+                sorted.forEach(([sName, sCount]) => {
+                    let pct = ((sCount / hourObj.total) * 100).toFixed(1);
+                    lines.push(`${sName}: ${sCount} (${pct}%)`);
+                });
+                return lines;
+            };
+            pulseCharts.circadian.update('none');
+        } else {
+            const circCtx = circCanvas.getContext('2d');
+            pulseCharts.circadian = new Chart(circCtx, {
+                type: 'radar',
+                data: {
+                    labels: Array.from({ length: 24 }, (_, i) => i.toString().padStart(2, '0') + ':00'),
+                    datasets: [{
+                        label: 'Activity',
+                        data: circData,
+                        backgroundColor: 'rgba(192, 132, 252, 0.2)',
+                        borderColor: '#c084fc',
+                        pointBackgroundColor: '#c084fc',
+                        borderWidth: 2
+                    }]
                 },
-                plugins: {
-                    legend: { display: false },
-                    tooltip: {
-                        callbacks: {
-                            label: function (context) {
-                                let hourKey = context.dataIndex.toString().padStart(2, '0');
-                                let hourObj = cD[hourKey];
-                                if (!hourObj || !hourObj.total) return `Total: 0`;
-                                let lines = [`Total: ${hourObj.total}`];
-                                let sorted = Object.entries(hourObj.senders).sort((a, b) => b[1] - a[1]);
-                                sorted.forEach(([sName, sCount]) => {
-                                    let pct = ((sCount / hourObj.total) * 100).toFixed(1);
-                                    lines.push(`${sName}: ${sCount} (${pct}%)`);
-                                });
-                                return lines;
+                options: {
+                    responsive: true,
+                    maintainAspectRatio: false,
+                    scales: {
+                        r: {
+                            angleLines: { color: 'rgba(255, 255, 255, 0.1)' },
+                            grid: { color: 'rgba(255, 255, 255, 0.1)' },
+                            pointLabels: { color: '#e2e8f0', font: { size: 10 } },
+                            ticks: { display: false }
+                        }
+                    },
+                    plugins: {
+                        legend: { display: false },
+                        tooltip: {
+                            callbacks: {
+                                label: function (context) {
+                                    let hourKey = context.dataIndex.toString().padStart(2, '0');
+                                    let hourObj = cD[hourKey];
+                                    if (!hourObj || !hourObj.total) return `Total: 0`;
+                                    let lines = [`Total: ${hourObj.total}`];
+                                    let sorted = Object.entries(hourObj.senders).sort((a, b) => b[1] - a[1]);
+                                    sorted.forEach(([sName, sCount]) => {
+                                        let pct = ((sCount / hourObj.total) * 100).toFixed(1);
+                                        lines.push(`${sName}: ${sCount} (${pct}%)`);
+                                    });
+                                    return lines;
+                                }
                             }
                         }
                     }
                 }
-            }
-        });
+            });
+        }
     }
 
     // 1b. Weekly Activity (PolarArea)
     const weekCanvas = document.getElementById('weeklyChart');
     if (weekCanvas && pulseData.weekly) {
-        const weekCtx = weekCanvas.getContext('2d');
-        if (pulseCharts.weekly) pulseCharts.weekly.destroy();
         const DOW_ORDER = ['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun'];
         const DOW_COLORS = ['#3b82f6','#06b6d4','#10b981','#84cc16','#f59e0b','#f43f5e','#8b5cf6'];
         const wd = pulseData.weekly;
-        pulseCharts.weekly = new Chart(weekCtx, {
-            type: 'polarArea',
-            data: {
-                labels: DOW_ORDER,
-                datasets: [{
-                    data: DOW_ORDER.map(d => wd[d] ? wd[d].total : 0),
-                    backgroundColor: DOW_COLORS.map(c => c + 'aa'),
-                    borderColor: DOW_COLORS,
-                    borderWidth: 2
-                }]
-            },
-            options: {
-                responsive: true,
-                maintainAspectRatio: false,
-                scales: { r: { ticks: { display: false }, grid: { color: 'rgba(255,255,255,0.08)' } } },
-                plugins: {
-                    legend: { display: false },
-                    tooltip: {
-                        callbacks: {
-                            label: function(context) {
-                                const dayName = context.label;
-                                const dayObj = wd[dayName];
-                                if (!dayObj || !dayObj.total) return `Total: 0`;
-                                const lines = [`${dayName}: ${dayObj.total} msgs`];
-                                Object.entries(dayObj.senders).sort((a,b) => b[1]-a[1]).slice(0,3).forEach(([sName, sCount]) => {
-                                    lines.push(`  ${sName}: ${sCount} (${((sCount/dayObj.total)*100).toFixed(1)}%)`);
-                                });
-                                return lines;
+        const weekData = DOW_ORDER.map(d => wd[d] ? wd[d].total : 0);
+
+        if (pulseCharts.weekly) {
+            pulseCharts.weekly.data.datasets[0].data = weekData;
+            pulseCharts.weekly.options.plugins.tooltip.callbacks.label = function(context) {
+                const dayName = context.label;
+                const dayObj = wd[dayName];
+                if (!dayObj || !dayObj.total) return `Total: 0`;
+                const lines = [`${dayName}: ${dayObj.total} msgs`];
+                Object.entries(dayObj.senders).sort((a,b) => b[1]-a[1]).slice(0,3).forEach(([sName, sCount]) => {
+                    lines.push(`  ${sName}: ${sCount} (${((sCount/dayObj.total)*100).toFixed(1)}%)`);
+                });
+                return lines;
+            };
+            pulseCharts.weekly.update('none');
+        } else {
+            const weekCtx = weekCanvas.getContext('2d');
+            pulseCharts.weekly = new Chart(weekCtx, {
+                type: 'polarArea',
+                data: {
+                    labels: DOW_ORDER,
+                    datasets: [{
+                        data: weekData,
+                        backgroundColor: DOW_COLORS.map(c => c + 'aa'),
+                        borderColor: DOW_COLORS,
+                        borderWidth: 2
+                    }]
+                },
+                options: {
+                    responsive: true,
+                    maintainAspectRatio: false,
+                    scales: { r: { ticks: { display: false }, grid: { color: 'rgba(255,255,255,0.08)' } } },
+                    plugins: {
+                        legend: { display: false },
+                        tooltip: {
+                            callbacks: {
+                                label: function(context) {
+                                    const dayName = context.label;
+                                    const dayObj = wd[dayName];
+                                    if (!dayObj || !dayObj.total) return `Total: 0`;
+                                    const lines = [`${dayName}: ${dayObj.total} msgs`];
+                                    Object.entries(dayObj.senders).sort((a,b) => b[1]-a[1]).slice(0,3).forEach(([sName, sCount]) => {
+                                        lines.push(`  ${sName}: ${sCount} (${((sCount/dayObj.total)*100).toFixed(1)}%)`);
+                                    });
+                                    return lines;
+                                }
                             }
                         }
                     }
                 }
-            }
-        });
+            });
+        }
     }
 
     // 2. Consistency Grid
@@ -762,69 +692,74 @@ function renderCharts() {
     // 3. Media DNA (Doughnut)
     const mediaCanvas = document.getElementById('mediaDnaChart');
     if (mediaCanvas) {
-        const mediaCtx = mediaCanvas.getContext('2d');
-        if (pulseCharts.mediaDna) pulseCharts.mediaDna.destroy();
-
         const mD = pulseData.media_dna;
-        pulseCharts.mediaDna = new Chart(mediaCtx, {
-            type: 'doughnut',
-            data: {
-                labels: ['Text', 'Photos', 'Voice/Video', 'Stickers/GIFs', 'Other'],
-                datasets: [{
-                    data: [
-                        mD.text?.total || 0,
-                        mD.photo?.total || 0,
-                        (mD.voice?.total || 0) + (mD.round_video?.total || 0),
-                        (mD.sticker?.total || 0) + (mD.gif?.total || 0),
-                        (mD.file?.total || 0) + (mD.location?.total || 0) + (mD.poll?.total || 0)
-                    ],
-                    backgroundColor: ['#3b82f6', '#10b981', '#f59e0b', '#ef4444', '#8b5cf6'],
-                    borderWidth: 0,
-                    hoverOffset: 4
-                }]
-            },
-            options: {
-                responsive: true,
-                maintainAspectRatio: false,
-                plugins: {
-                    legend: { position: 'right', labels: { color: '#e2e8f0' } },
-                    tooltip: {
-                        callbacks: {
-                            label: function (context) {
-                                let label = context.label;
-                                let keys = [];
-                                if (label === 'Text') keys = ['text'];
-                                else if (label === 'Photos') keys = ['photo'];
-                                else if (label === 'Voice/Video') keys = ['voice', 'round_video'];
-                                else if (label === 'Stickers/GIFs') keys = ['sticker', 'gif'];
-                                else keys = ['file', 'location', 'poll'];
+        const mediaData = [
+            mD.text?.total || 0,
+            mD.photo?.total || 0,
+            (mD.voice?.total || 0) + (mD.round_video?.total || 0),
+            (mD.sticker?.total || 0) + (mD.gif?.total || 0),
+            (mD.file?.total || 0) + (mD.location?.total || 0) + (mD.poll?.total || 0)
+        ];
+        const mediaTooltipFn = function (context) {
+            let label = context.label;
+            let keys = [];
+            if (label === 'Text') keys = ['text'];
+            else if (label === 'Photos') keys = ['photo'];
+            else if (label === 'Voice/Video') keys = ['voice', 'round_video'];
+            else if (label === 'Stickers/GIFs') keys = ['sticker', 'gif'];
+            else keys = ['file', 'location', 'poll'];
 
-                                let total = 0;
-                                let senders = {};
-                                keys.forEach(k => {
-                                    if (mD[k] && mD[k].total) {
-                                        total += mD[k].total;
-                                        Object.entries(mD[k].senders).forEach(([s, c]) => {
-                                            senders[s] = (senders[s] || 0) + c;
-                                        });
-                                    }
-                                });
+            let total = 0;
+            let senders = {};
+            keys.forEach(k => {
+                if (mD[k] && mD[k].total) {
+                    total += mD[k].total;
+                    Object.entries(mD[k].senders).forEach(([s, c]) => {
+                        senders[s] = (senders[s] || 0) + c;
+                    });
+                }
+            });
 
-                                if (total === 0) return `Total: 0`;
-                                let lines = [`Total: ${total}`];
-                                let sorted = Object.entries(senders).sort((a, b) => b[1] - a[1]);
-                                sorted.forEach(([sName, sCount]) => {
-                                    let pct = ((sCount / total) * 100).toFixed(1);
-                                    lines.push(`${sName}: ${sCount} (${pct}%)`);
-                                });
-                                return lines;
-                            }
-                        }
-                    }
+            if (total === 0) return `Total: 0`;
+            let lines = [`Total: ${total}`];
+            let sorted = Object.entries(senders).sort((a, b) => b[1] - a[1]);
+            sorted.forEach(([sName, sCount]) => {
+                let pct = ((sCount / total) * 100).toFixed(1);
+                lines.push(`${sName}: ${sCount} (${pct}%)`);
+            });
+            return lines;
+        };
+
+        if (pulseCharts.mediaDna) {
+            pulseCharts.mediaDna.data.datasets[0].data = mediaData;
+            pulseCharts.mediaDna.options.plugins.tooltip.callbacks.label = mediaTooltipFn;
+            pulseCharts.mediaDna.update('none');
+        } else {
+            const mediaCtx = mediaCanvas.getContext('2d');
+            pulseCharts.mediaDna = new Chart(mediaCtx, {
+                type: 'doughnut',
+                data: {
+                    labels: ['Text', 'Photos', 'Voice/Video', 'Stickers/GIFs', 'Other'],
+                    datasets: [{
+                        data: mediaData,
+                        backgroundColor: ['#3b82f6', '#10b981', '#f59e0b', '#ef4444', '#8b5cf6'],
+                        borderWidth: 0,
+                        hoverOffset: 4
+                    }]
                 },
-                cutout: '70%'
-            }
-        });
+                options: {
+                    responsive: true,
+                    maintainAspectRatio: false,
+                    plugins: {
+                        legend: { position: 'right', labels: { color: '#e2e8f0' } },
+                        tooltip: {
+                            callbacks: { label: mediaTooltipFn }
+                        }
+                    },
+                    cutout: '70%'
+                }
+            });
+        }
     }
 
     // 4. Chat Dynamics (Replaces Sender Battle)
@@ -1283,7 +1218,18 @@ function renderDynamicsBurst(top10) {
         if (sender.burst_freq) {
             let totalBursts = Object.values(sender.burst_freq).reduce((a, b) => a + b, 0);
             if (totalBursts > 0) {
-                const colors = ['#c084fc', '#a855f7', '#9333ea', '#7e22ce', '#6b21a8', '#db2777', '#be185d', '#9d174d', '#831843'];
+                const colors = [
+                    '#c084fc', // 1
+                    '#a855f7', // 2
+                    '#8b5cf6', // 3
+                    '#6366f1', // 4
+                    '#3b82f6', // 5
+                    '#10b981', // 6
+                    '#f59e0b', // 7
+                    '#f97316', // 8
+                    '#ef4444', // 9
+                    '#881337'  // 10+
+                ];
                 const burstKeys = Object.keys(sender.burst_freq).map(Number).sort((a,b) => a-b);
                 
                 const barsHtml = burstKeys.map((len, idx) => {

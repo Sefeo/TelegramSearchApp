@@ -6,6 +6,8 @@ import platform
 import subprocess
 import random
 import webbrowser
+import gzip
+import io
 from threading import Timer
 
 # Setup paths
@@ -13,6 +15,27 @@ BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 DB_NAME = os.path.join(BASE_DIR, "chat_history.db")
 
 app = Flask(__name__, static_folder=os.path.join(BASE_DIR, "static"), static_url_path='/static')
+
+# In-memory cache for pulse_raw (invalidated on server restart)
+_pulse_raw_cache = None
+
+@app.after_request
+def gzip_response(response):
+    """Compress JSON responses with gzip if the client supports it."""
+    if (
+        response.content_type
+        and 'application/json' in response.content_type
+        and response.status_code == 200
+        and 'gzip' in request.headers.get('Accept-Encoding', '')
+        and len(response.get_data()) > 1024  # Only compress if > 1KB
+    ):
+        buf = io.BytesIO()
+        with gzip.GzipFile(fileobj=buf, mode='wb', compresslevel=6) as gz:
+            gz.write(response.get_data())
+        response.set_data(buf.getvalue())
+        response.headers['Content-Encoding'] = 'gzip'
+        response.headers['Content-Length'] = len(response.get_data())
+    return response
 
 def dict_factory(cursor, row):
     d = {}
@@ -458,7 +481,13 @@ def get_pinned():
 
 @app.route('/api/pulse_raw', methods=['GET'])
 def pulse_raw():
-    """Return all messages with minimal columns for client-side pulse stats aggregation."""
+    """Return all messages with minimal columns for client-side pulse stats aggregation.
+    Uses in-memory cache so subsequent requests skip the DB query entirely."""
+    global _pulse_raw_cache
+    
+    if _pulse_raw_cache is not None:
+        return jsonify(_pulse_raw_cache)
+    
     try:
         conn = sqlite3.connect(DB_NAME)
         c = conn.cursor()
@@ -500,6 +529,9 @@ def pulse_raw():
         if min_ts and max_ts:
             result['min_date'] = min_ts[:10]
             result['max_date'] = max_ts[:10]
+        
+        # Cache in memory for subsequent requests
+        _pulse_raw_cache = result
         
         return jsonify(result)
         

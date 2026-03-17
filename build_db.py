@@ -35,8 +35,17 @@ def parse_folder(conn, folder_path, folder_name):
         print(f"Error: Folder '{folder_path}' does not exist!")
         return 0
 
+    # Correct sorting for messages.html, messages2.html, ..., messages10.html
+    def sort_key(filename):
+        # Extract number from 'messagesN.html'
+        match = re.search(r'messages(\d+)\.html', filename)
+        if match:
+            return int(match.group(1))
+        # 'messages.html' comes first (0)
+        return 0
+
     files = [f for f in os.listdir(folder_path) if f.startswith('messages') and f.endswith('.html')]
-    files.sort(key=lambda s: [int(t) if t.isdigit() else t.lower() for t in re.split('([0-9]+)', s)])
+    files.sort(key=sort_key)
 
     c = conn.cursor()
     total = 0
@@ -217,19 +226,73 @@ def parse_folder(conn, folder_path, folder_name):
     return total
 
 if __name__ == "__main__":
-    db_connection = setup_database()
-    FOLDER_1 = r"C:\Users\nismo\Desktop\група"   
-    FOLDER_2 = r"C:\Users\nismo\Desktop\група"  
+    # 1. Database Existence Check
+    if os.path.exists(DB_NAME):
+        conn = sqlite3.connect(DB_NAME)
+        c = conn.cursor()
+        try:
+            c.execute("SELECT COUNT(*) FROM messages")
+            count = c.fetchone()[0]
+            if count > 0:
+                print(f"\n[!] Error: Database already exists and contains {count} messages.")
+                print("Please delete 'chat_history.db' if you want to rebuild, or move it to another folder.")
+                conn.close()
+                exit()
+        except sqlite3.OperationalError:
+            # Table might not exist yet, that's fine
+            pass
+        conn.close()
 
+    # 2. Folder Input Loop
+    print("\n--- Telegram Database Builder ---")
+    target_folders = []
+    
+    while True:
+        example_path = r"C:\Users\Name\Downloads\Telegram Desktop\ChatExport_2024-03-17"
+        print(f"\nInsert path to Telegram Exported Chat folder (contains messages.html):")
+        print(f"Example: {example_path}")
+        path = input("Path: ").strip().strip('"').strip("'")
+        
+        if not path:
+            if target_folders:
+                break
+            else:
+                print("You must provide at least one folder path.")
+                continue
+
+        # 3. Validation
+        html_exists = os.path.exists(os.path.join(path, "messages.html"))
+        json_exists = os.path.exists(os.path.join(path, "messages.json"))
+
+        if html_exists:
+            target_folders.append(path)
+            print(f"Added: {path}")
+            
+            more = input("\nAny more folders to link to this one? (Leave empty to proceed): ").strip()
+            if not more:
+                break
+        elif json_exists:
+            print("\n[!] Error: 'messages.json' found. JSON format is not currently supported. Please export as HTML.")
+        else:
+            print(f"\n[!] Error: Path is incorrect. Could not find 'messages.html' in {path}")
+
+    # 4. Build Process
+    db_connection = setup_database()
+    total_indexed = 0
+    
+    for i, folder in enumerate(target_folders):
+        folder_name = os.path.basename(folder) if i == 0 else f"Linked_{i}"
+        total_indexed += parse_folder(db_connection, folder, folder_name)
+
+    # 5. Final Processing
+    print("\nLinking replies...")
     c = db_connection.cursor()
-    c.execute("SELECT COUNT(*) FROM messages")
-    if c.fetchone()[0] > 0:
-        print("Database already has data. Please delete 'chat_history.db' to rebuild.")
-    else:
-        t1 = parse_folder(db_connection, FOLDER_1, "Old")
-        t2 = parse_folder(db_connection, FOLDER_2, "New")
-        print("\nLinking replies...")
-        c.execute('''UPDATE messages SET reply_to_id = (SELECT id FROM messages m2 WHERE m2.tg_id = messages.reply_to_tg_id) WHERE reply_to_tg_id IS NOT NULL''')
-        db_connection.commit()
-        print(f"\nDone! Indexed {t1 + t2} messages.")
+    c.execute('''UPDATE messages SET reply_to_id = (SELECT id FROM messages m2 WHERE m2.tg_id = messages.reply_to_tg_id) WHERE reply_to_tg_id IS NOT NULL''')
+    db_connection.commit()
+    
+    # 6. Final Summary
+    print(f"\nSuccess! Indexed {total_indexed} messages.")
+    print("\n[!] IMPORTANT: Do NOT change the path of linked Telegram exported chats.")
+    print("Some functions rely on these paths to extract media files (videos, stickers, voice messages).")
+    
     db_connection.close()
