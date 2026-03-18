@@ -1,15 +1,24 @@
 import os
 import sqlite3
 import re
+import argparse
 from datetime import datetime
 from bs4 import BeautifulSoup
 import json
+import sys
 
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
-DB_NAME = os.path.join(BASE_DIR, "chat_history.db")
+DEFAULT_DB_NAME = os.path.join(BASE_DIR, "chat_history.db")
 
-def setup_database():
-    conn = sqlite3.connect(DB_NAME)
+# Global database name that can be overridden
+DB_PATH = DEFAULT_DB_NAME
+
+def setup_database(db_path):
+    # Ensure directory exists
+    db_dir = os.path.dirname(os.path.abspath(db_path))
+    os.makedirs(db_dir, exist_ok=True)
+        
+    conn = sqlite3.connect(db_path)
     c = conn.cursor()
     c.execute('''CREATE TABLE IF NOT EXISTS messages 
                  (id INTEGER PRIMARY KEY AUTOINCREMENT, 
@@ -47,6 +56,14 @@ def parse_folder(conn, folder_path, folder_name):
     files = [f for f in os.listdir(folder_path) if f.startswith('messages') and f.endswith('.html')]
     files.sort(key=sort_key)
 
+    # Check for lxml availability
+    parser = "html.parser"
+    try:
+        import lxml
+        parser = "lxml"
+    except ImportError:
+        pass
+
     c = conn.cursor()
     total = 0
     pinned_tg_ids = set()
@@ -57,9 +74,9 @@ def parse_folder(conn, folder_path, folder_name):
 
     for file in files:
         file_path = os.path.join(folder_path, file)
-        print(f"  Reading {file}...")
+        print(f"  Reading {file} using {parser}...")
         with open(file_path, 'r', encoding='utf-8', errors='ignore') as f:
-            soup = BeautifulSoup(f.read(), 'html.parser')
+            soup = BeautifulSoup(f.read(), parser)
             
             for msg in soup.find_all('div', class_=re.compile(r'message')):
                 classes = msg.get('class', [])
@@ -124,9 +141,8 @@ def parse_folder(conn, folder_path, folder_name):
                             ans_text = ans.text.strip().replace('-', '', 1).strip() # Remove leading dash
                             
                             is_chosen = "chosen" in vote_info
-                            try:
-                                count = int(re.search(r'(\d+)', vote_info).group(1))
-                            except: count = 0
+                            match = re.search(r'(\d+)', vote_info)
+                            count = int(match.group(1)) if match else 0
                             
                             options.append({"text": ans_text, "count": count, "chosen": is_chosen})
                         
@@ -187,8 +203,8 @@ def parse_folder(conn, folder_path, folder_name):
                                  (source_folder, file_name, sender, timestamp, text_content, 
                                   media_path, media_type, tg_id, reply_to_tg_id) 
                                  VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)""",
-                              (folder_name, file, current_sender, msg_date, text_content, 
-                               media_path, media_type, tg_id, reply_to_tg_id))
+                               (folder_name, file, current_sender, msg_date, text_content, 
+                                media_path, media_type, tg_id, reply_to_tg_id))
                     total += 1
 
                 # --- 3. System Messages ---
@@ -226,67 +242,94 @@ def parse_folder(conn, folder_path, folder_name):
     return total
 
 if __name__ == "__main__":
-    # 1. Database Existence Check
-    if os.path.exists(DB_NAME):
-        conn = sqlite3.connect(DB_NAME)
+    parser = argparse.ArgumentParser(description="Telegram HTML Export to SQLite Database Builder")
+    parser.add_argument("--input", help="Path to the Telegram export folder (contains messages.html)")
+    parser.add_argument("--db", default=DEFAULT_DB_NAME, help=f"Custom path for the output database file (default: {DEFAULT_DB_NAME})")
+    parser.add_argument("--reset", action="store_true", help="Drop and recreate the database before importing")
+    
+    args = parser.parse_args()
+    DB_PATH = args.db
+
+    # 1. Reset Logic
+    if args.reset and os.path.exists(DB_PATH):
+        print(f"Resetting database: {DB_PATH}")
+        try:
+            os.remove(DB_PATH)
+        except Exception as e:
+            print(f"Error removing old database: {e}")
+            sys.exit(1)
+
+    # 2. Database Existence Check (if not resetting)
+    if not args.reset and os.path.exists(DB_PATH):
+        conn = sqlite3.connect(DB_PATH)
         c = conn.cursor()
         try:
             c.execute("SELECT COUNT(*) FROM messages")
             count = c.fetchone()[0]
             if count > 0:
                 print(f"\n[!] Error: Database already exists and contains {count} messages.")
-                print("Please delete 'chat_history.db' if you want to rebuild, or move it to another folder.")
+                print(f"Path: {DB_PATH}")
+                print("Please delete the file if you want to rebuild, or use the --reset flag.")
                 conn.close()
-                exit()
+                sys.exit(1)
         except sqlite3.OperationalError:
             # Table might not exist yet, that's fine
             pass
         conn.close()
 
-    # 2. Folder Input Loop
-    print("\n--- Telegram Database Builder ---")
-    print("Folders will be linked chronologically in the order you provide them.")
+    # 3. Folder Collection
     target_folders = []
     
-    # First mandatory folder
-    example_path = r"C:\Users\Name\Downloads\Telegram Desktop\ChatExport_2024-03-17"
-    print(f"\n1. Insert path to the FIRST Telegram Exported Chat folder (contains messages.html):")
-    print(f"Example: {example_path}")
-    
-    while True:
-        path = input("Path: ").strip().strip('"').strip("'")
-        if not path:
-            print("You must provide at least one folder path.")
-            continue
-            
-        if os.path.exists(os.path.join(path, "messages.html")):
-            target_folders.append(path)
-            print(f"Added: {path}")
-            break
-        elif os.path.exists(os.path.join(path, "messages.json")):
-            print("\n[!] Error: 'messages.json' found. JSON format is not currently supported. Please export as HTML.")
+    if args.input:
+        # CLI Mode
+        if os.path.exists(os.path.join(args.input, "messages.html")):
+            target_folders.append(args.input)
         else:
-            print(f"\n[!] Error: Path is incorrect. Could not find 'messages.html' in {path}")
-        print("Please try again.")
-
-    # Subsequent optional folders
-    while True:
-        print(f"\nLink another folder? (Order matters for chronological continuity)")
-        path = input("Path (or leave empty to proceed): ").strip().strip('"').strip("'")
+            print(f"Error: Could not find 'messages.html' in {args.input}")
+            sys.exit(1)
+    else:
+        # Interactive Mode
+        print("\n--- Telegram Database Builder ---")
+        print("Folders will be linked chronologically in the order you provide them.")
         
-        if not path:
-            break
+        example_path = r"C:\Users\Name\Downloads\Telegram Desktop\ChatExport_2024-03-17"
+        print(f"\n1. Insert path to the FIRST Telegram Exported Chat folder (contains messages.html):")
+        print(f"Example: {example_path}")
+        
+        while True:
+            path = input("Path: ").strip().strip('"').strip("'")
+            if not path:
+                print("You must provide at least one folder path.")
+                continue
+                
+            if os.path.exists(os.path.join(path, "messages.html")):
+                target_folders.append(path)
+                print(f"Added: {path}")
+                break
+            elif os.path.exists(os.path.join(path, "messages.json")):
+                print("\n[!] Error: 'messages.json' found. JSON format is not currently supported. Please export as HTML.")
+            else:
+                print(f"\n[!] Error: Path is incorrect. Could not find 'messages.html' in {path}")
+            print("Please try again.")
 
-        if os.path.exists(os.path.join(path, "messages.html")):
-            target_folders.append(path)
-            print(f"Added: {path}")
-        elif os.path.exists(os.path.join(path, "messages.json")):
-            print("\n[!] Error: 'messages.json' found. JSON format is not supported. Skipping.")
-        else:
-            print(f"\n[!] Error: Path is incorrect. Could not find 'messages.html' in {path}. Skipping.")
+        # Subsequent optional folders
+        while True:
+            print(f"\nLink another folder? (Order matters for chronological continuity)")
+            path = input("Path (or leave empty to proceed): ").strip().strip('"').strip("'")
+            
+            if not path:
+                break
+
+            if os.path.exists(os.path.join(path, "messages.html")):
+                target_folders.append(path)
+                print(f"Added: {path}")
+            elif os.path.exists(os.path.join(path, "messages.json")):
+                print("\n[!] Error: 'messages.json' found. JSON format is not supported. Skipping.")
+            else:
+                print(f"\n[!] Error: Path is incorrect. Could not find 'messages.html' in {path}. Skipping.")
 
     # 4. Build Process
-    db_connection = setup_database()
+    db_connection = setup_database(DB_PATH)
     total_indexed = 0
     
     for i, folder in enumerate(target_folders):
@@ -301,6 +344,7 @@ if __name__ == "__main__":
     
     # 6. Final Summary
     print(f"\nSuccess! Indexed {total_indexed} messages.")
+    print(f"Database saved to: {DB_PATH}")
     print("\n[!] IMPORTANT: Do NOT change the path of linked Telegram exported chats.")
     print("Some functions rely on these paths to extract media files (videos, stickers, voice messages).")
     

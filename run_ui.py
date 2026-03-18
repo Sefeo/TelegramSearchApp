@@ -1,3 +1,4 @@
+from __future__ import annotations
 from flask import Flask, request, jsonify, render_template, send_file
 import sqlite3
 import os
@@ -8,11 +9,19 @@ import random
 import webbrowser
 import gzip
 import io
+import json
+import traceback
+import argparse
+from datetime import datetime
 from threading import Timer
+from typing import Any, Optional, Union, Dict, List, Set, Tuple, cast
 
 # Setup paths
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
-DB_NAME = os.path.join(BASE_DIR, "chat_history.db")
+DEFAULT_DB_NAME = os.path.join(BASE_DIR, "chat_history.db")
+
+# This will be overridden by argparse if provided
+DB_NAME = DEFAULT_DB_NAME
 
 app = Flask(__name__, static_folder=os.path.join(BASE_DIR, "static"), static_url_path='/static')
 
@@ -112,7 +121,8 @@ def get_messages():
             if row:
                 ts = row['timestamp']
                 c.execute(get_joined_query("WHERE timestamp < ?", "ORDER BY timestamp DESC", "LIMIT ?"), (ts, limit))
-                results = c.fetchall()[::-1] # Reverse to chronological
+                # Use Any cast to bypass broken type checker slicing support for list
+                results = cast(Any, c.fetchall())[::-1] 
             else:
                 results = []
 
@@ -130,7 +140,7 @@ def get_messages():
         else:
             # Initial Load: Get the very latest messages
             c.execute(get_joined_query("", "ORDER BY timestamp DESC", "LIMIT ?"), (limit,))
-            results = c.fetchall()[::-1]
+            results = cast(Any, c.fetchall())[::-1]
 
         conn.close()
         return jsonify(results)
@@ -379,7 +389,8 @@ def upgrade_db():
         cached_paths = set(row[0] for row in c.fetchall())
         
         inserts = []
-        for msg_id, path in media_rows:
+        for msg_id, path_raw in media_rows:
+            path: str = cast(str, path_raw)
             if path not in cached_paths:
                 if os.path.exists(path):
                     try:
@@ -430,22 +441,21 @@ def get_color_for_name(name):
     return colors[abs(hash(name)) % len(colors)]
 
 @app.route('/avatar/<sender>')
-def get_avatar(sender):
+def get_avatar(sender: str):
     # 1. Clean filename properly for Windows/all OS
     # Replace anything that's not alphanumeric, space, dot, comma, dash, underscore
-    import re
-    safe_sender = re.sub(r'[^\w\s\.,-]', '_', sender).strip()
+    safe_sender: str = re.sub(r'[^\w\s\.,-]', '_', sender).strip()
     if not safe_sender:
         safe_sender = "unknown"
     
     # 2. Check for existing custom images
     for ext in ['.jpg', '.jpeg', '.png', '.webp', '.svg']:
-        full_path = os.path.join(AVATAR_DIR, safe_sender + ext)
+        full_path: str = os.path.join(AVATAR_DIR, f"{safe_sender}{ext}")
         if os.path.exists(full_path):
             return send_file(full_path)
             
     # 3. If missing, generate a default SVG and save it
-    initial = sender[0].upper() if sender else "?"
+    initial = sender[0].upper() if (sender and len(sender) > 0) else "?"
     color = get_color_for_name(sender)
     
     svg_content = f'''
@@ -536,7 +546,6 @@ def pulse_raw():
         return jsonify(result)
         
     except Exception as e:
-        import traceback
         traceback.print_exc()
         return jsonify({"error": str(e)}), 500
 
@@ -557,6 +566,7 @@ def pulse_stats():
         base_where += " AND timestamp <= ?"
         params.append(end_date + " 23:59:59")
         
+    valid_senders: Optional[Set[str]] = None
     if sender and sender != 'all':
         senders = [s.strip() for s in sender.split(',')]
         sender_clauses = []
@@ -566,10 +576,21 @@ def pulse_stats():
         
         base_where += " AND (" + " OR ".join(sender_clauses) + ")"
         valid_senders = set(senders)
-    else:
-        valid_senders = None
         
-    stats = {}
+    v_senders: Any = valid_senders
+    stats: Dict[str, Any] = {
+        'years': [],
+        'min_date': None,
+        'max_date': None,
+        'circadian': {},
+        'consistency': {},
+        'media_dna': {},
+        'sender_battle': [],
+        'emojis': [],
+        'words': [],
+        'stickers': [],
+        'gifs': []
+    }
     try:
         conn = sqlite3.connect(DB_NAME)
         c = conn.cursor()
@@ -590,9 +611,13 @@ def pulse_stats():
             h, s_raw, cnt = row[0], row[1], row[2]
             cleaned_s = clean_sender_name(s_raw) if s_raw else "Unknown"
             if cleaned_s == 'System': continue
-            if valid_senders and cleaned_s not in valid_senders: continue
-            hours[h]['total'] += cnt
-            hours[h]['senders'][cleaned_s] = hours[h]['senders'].get(cleaned_s, 0) + cnt
+            if v_senders is not None and cleaned_s not in v_senders: continue # type: ignore
+            # Update circadian stats for this hour
+            h_data = hours[h]
+            h_data['total'] += cnt
+            h_senders = h_data['senders']
+            if isinstance(h_senders, dict):
+                h_senders[cleaned_s] = h_senders.get(cleaned_s, 0) + cnt
         stats['circadian'] = hours
         
         # 3. Consistency Grid
@@ -601,25 +626,31 @@ def pulse_stats():
         
         # 4. Media DNA
         c.execute(f"SELECT media_type, sender, COUNT(*) FROM messages {base_where} AND media_type IS NOT NULL GROUP BY media_type, sender", params)
-        media_counts = {}
+        media_counts: Dict[str, Any] = {'text': {'total': 0, 'senders': {}}}
         for row in c.fetchall():
             mtype, s_raw, cnt = row[0], row[1], row[2]
             cleaned_s = clean_sender_name(s_raw) if s_raw else "Unknown"
             if cleaned_s == 'System': continue
-            if valid_senders and cleaned_s not in valid_senders: continue
+            if v_senders is not None and cleaned_s not in v_senders: continue # type: ignore
             if mtype not in media_counts: media_counts[mtype] = {'total': 0, 'senders': {}}
-            media_counts[mtype]['total'] += cnt
-            media_counts[mtype]['senders'][cleaned_s] = media_counts[mtype]['senders'].get(cleaned_s, 0) + cnt
+            m_data = media_counts[mtype]
+            m_data['total'] += cnt
+            m_senders = m_data['senders']
+            if isinstance(m_senders, dict):
+                m_senders[cleaned_s] = m_senders.get(cleaned_s, 0) + cnt
             
         c.execute(f"SELECT sender, COUNT(*) FROM messages {base_where} AND media_type IS NULL AND text_content IS NOT NULL AND text_content != '' GROUP BY sender", params)
-        media_counts['text'] = {'total': 0, 'senders': {}}
+        t_data = media_counts['text']
         for row in c.fetchall():
             s_raw, cnt = row[0], row[1]
             cleaned_s = clean_sender_name(s_raw) if s_raw else "Unknown"
             if cleaned_s == 'System': continue
-            if valid_senders and cleaned_s not in valid_senders: continue
-            media_counts['text']['total'] += cnt
-            media_counts['text']['senders'][cleaned_s] = media_counts['text']['senders'].get(cleaned_s, 0) + cnt
+            if v_senders is not None and cleaned_s not in v_senders: continue # type: ignore
+            
+            t_data['total'] += cnt
+            t_senders = t_data['senders']
+            if isinstance(t_senders, dict):
+                t_senders[cleaned_s] = t_senders.get(cleaned_s, 0) + cnt
             
         stats['media_dna'] = media_counts
         
@@ -630,7 +661,7 @@ def pulse_stats():
         for s, cnt in sender_counts_raw:
             cleaned = clean_sender_name(s) if s else "Unknown"
             if cleaned == 'System': continue
-            if valid_senders and cleaned not in valid_senders: continue
+            if v_senders is not None and cleaned not in v_senders: continue # type: ignore
             sender_counts[cleaned] = sender_counts.get(cleaned, 0) + cnt
         stats['sender_battle'] = [{'name': k, 'count': v} for k, v in sorted(sender_counts.items(), key=lambda x:x[1], reverse=True)]
         
@@ -640,53 +671,62 @@ def pulse_stats():
         
         all_text = " ".join([t[0] for t in texts_data])
         
-        import re
-        from collections import Counter
         # Regex for most standard emojis
         emoji_pattern = re.compile("[\U0001F600-\U0001F64F\U0001F300-\U0001F5FF\U0001F680-\U0001F6FF\U0001F1E0-\U0001F1FF\U00002600-\U000026FF\U00002700-\U000027BF\U0001F900-\U0001F9FF\U0001FA70-\U0001FAFF]")
         
-        emoji_counts = {}
+        v_emoji_map: Any = {}
         for text, s in texts_data:
             cleaned_s = clean_sender_name(s) if s else "Unknown"
             if cleaned_s == 'System': continue
-            if valid_senders and cleaned_s not in valid_senders: continue
+            if v_senders is not None and cleaned_s not in v_senders: continue # type: ignore
             found_emojis = emoji_pattern.findall(text)
             for e in found_emojis:
-                if e not in emoji_counts:
-                    emoji_counts[e] = {'total': 0, 'senders': {}}
-                emoji_counts[e]['total'] += 1
-                emoji_counts[e]['senders'][cleaned_s] = emoji_counts[e]['senders'].get(cleaned_s, 0) + 1
+                if e not in v_emoji_map:
+                    v_emoji_map[e] = {'total': 0, 'senders': {}} # type: ignore
                 
-        top_emojis = sorted(emoji_counts.items(), key=lambda x: x[1]['total'], reverse=True)[:10]
+                e_data = v_emoji_map[e] # type: ignore
+                e_data['total'] += 1
+                e_senders = e_data['senders']
+                if isinstance(e_senders, dict):
+                    e_senders[cleaned_s] = e_senders.get(cleaned_s, 0) + 1
+                
+        sorted_emoji_items = sorted(v_emoji_map.items(), key=lambda x: int(x[1].get('total', 0)) if isinstance(x[1], dict) else 0, reverse=True)
+        top_emojis = sorted_emoji_items[:10]  # type: ignore
         stats['emojis'] = [{'emoji': k, 'count': v['total'], 'senders': v['senders']} for k, v in top_emojis]
         
         # Find words >= 4 chars, ignoring links
         text_no_links = re.sub(r'http\S+|www\.\S+|<.*?>', '', all_text.lower())
         word_pattern = re.compile(r'\b[a-zA-Zа-яА-ЯіїєґІЇЄҐ]{4,}\b')
-        words = []
+        words: List[Tuple[str, str]] = []
         for text, s in texts_data:
             cleaned_s = clean_sender_name(s) if s else "Unknown"
             if cleaned_s == 'System': continue
-            if valid_senders and cleaned_s not in valid_senders: continue
+            if v_senders is not None and cleaned_s not in v_senders: continue # type: ignore
             clean_text = re.sub(r'http\S+|www\.\S+|<.*?>', '', text.lower())
             found_words = word_pattern.findall(clean_text)
             for w in found_words:
-                words.append((w, cleaned_s))
+                words.append((cast(str, w), cleaned_s))
                 
         stop_words = {'that', 'this', 'with', 'from', 'your', 'have', 'they', 'will', 'what', 'there', 'would', 'about', 'which', 'when', 'make', 'like', 'time', 'just', 'know', 'take', 'person', 'into', 'year', 'your', 'good', 'some', 'could', 'them', 'other', 'than', 'then', 'look', 'only', 'come', 'over', 'think', 'also', 'back', 'after', 'even', 'want', 'because', 'these', 'give', 'most', 'меня', 'тебя', 'тебе', 'мне', 'что', 'как', 'это', 'все', 'так', 'его', 'только', 'было', 'чтобы', 'если', 'уже', 'или', 'нет', 'еще', 'даже', 'быть', 'когда', 'нас', 'для', 'вот', 'вам', 'мы', 'ты', 'вы', 'он', 'она', 'они', 'оно', 'вас', 'их', 'нам', 'им', 'мной', 'тобой', 'нами', 'вами', 'ими', 'href'}
         
-        word_counts = {}
+        v_word_counts: Any = {}
         for w, s in words:
             if w in stop_words or len(w) > 20: continue
-            if w not in word_counts:
-                word_counts[w] = {'total': 0, 'senders': {}}
-            word_counts[w]['total'] += 1
-            word_counts[w]['senders'][s] = word_counts[w]['senders'].get(s, 0) + 1
+            if w not in v_word_counts:
+                v_word_counts[w] = {'total': 0, 'senders': {}}
+                
+            w_data = v_word_counts[w]
+            if isinstance(w_data, dict):
+                w_data['total'] = int(w_data.get('total', 0)) + 1
+                w_senders = w_data.get('senders')
+                if isinstance(w_senders, dict):
+                    w_senders[s] = w_senders.get(s, 0) + 1
             
-        top_words = sorted(word_counts.items(), key=lambda x: x[1]['total'], reverse=True)[:15]
+        # Fix: Split sorting and slicing to resolve indexing error
+        sorted_word_items = sorted(v_word_counts.items(), key=lambda x: int(x[1].get('total', 0)) if isinstance(x[1], dict) else 0, reverse=True)
+        top_words = sorted_word_items[:15]  # type: ignore
         stats['words'] = [{'word': k, 'count': v['total'], 'senders': v['senders']} for k, v in top_words]
         
-        # 7. Sticker and GIF Fingerprints
         # 7. Sticker and GIF Fingerprints
         c.execute(f"SELECT id, media_path, sender FROM messages {base_where} AND media_type = 'sticker' AND media_path IS NOT NULL", params)
         sticker_rows = c.fetchall()
@@ -695,7 +735,7 @@ def pulse_stats():
         c.execute("SELECT media_path, size FROM media_sizes_cache")
         size_cache = {row[0]: row[1] for row in c.fetchall()}
         
-        sticker_counts = {}
+        sticker_counts: Dict[int, Any] = {}
         for msg_id, path, s in sticker_rows:
             if not path: continue
             
@@ -712,13 +752,19 @@ def pulse_stats():
                     
             cleaned_s = clean_sender_name(s) if s else "Unknown"
             if cleaned_s == 'System': continue
-            if valid_senders and cleaned_s not in valid_senders: continue
+            if v_senders is not None and cleaned_s not in v_senders: continue # type: ignore
             if size not in sticker_counts:
                 sticker_counts[size] = {'total': 0, 'senders': {}, 'path': path}
-            sticker_counts[size]['total'] += 1
-            sticker_counts[size]['senders'][cleaned_s] = sticker_counts[size]['senders'].get(cleaned_s, 0) + 1
             
-        top_stickers = sorted(sticker_counts.values(), key=lambda x: x['total'], reverse=True)[:10]
+            s_data = sticker_counts[size]
+            if isinstance(s_data, dict):
+                s_data['total'] = int(s_data.get('total', 0)) + 1
+                s_senders = s_data.get('senders')
+                if isinstance(s_senders, dict):
+                    s_senders[cleaned_s] = s_senders.get(cleaned_s, 0) + 1
+            
+        sorted_sticker_items = sorted(sticker_counts.values(), key=lambda x: int(x.get('total', 0)) if isinstance(x, dict) else 0, reverse=True)
+        top_stickers = sorted_sticker_items[:10]  # type: ignore
         stats['stickers'] = []
         for v in top_stickers:
             name = os.path.basename(v['path'])
@@ -727,7 +773,7 @@ def pulse_stats():
         c.execute(f"SELECT id, media_path, sender FROM messages {base_where} AND media_type = 'gif' AND media_path IS NOT NULL", params)
         gif_rows = c.fetchall()
         
-        gif_counts = {}
+        gif_counts: Dict[int, Any] = {}
         for msg_id, path, s in gif_rows:
             if not path: continue
             
@@ -743,13 +789,19 @@ def pulse_stats():
                     
             cleaned_s = clean_sender_name(s) if s else "Unknown"
             if cleaned_s == 'System': continue
-            if valid_senders and cleaned_s not in valid_senders: continue
+            if v_senders is not None and cleaned_s not in v_senders: continue # type: ignore
             if size not in gif_counts:
                 gif_counts[size] = {'total': 0, 'senders': {}, 'path': path}
-            gif_counts[size]['total'] += 1
-            gif_counts[size]['senders'][cleaned_s] = gif_counts[size]['senders'].get(cleaned_s, 0) + 1
             
-        top_gifs = sorted(gif_counts.values(), key=lambda x: x['total'], reverse=True)[:10]
+            g_data = gif_counts[size]
+            if isinstance(g_data, dict):
+                g_data['total'] = int(g_data.get('total', 0)) + 1
+                g_senders = g_data.get('senders')
+                if isinstance(g_senders, dict):
+                    g_senders[cleaned_s] = g_senders.get(cleaned_s, 0) + 1
+            
+        sorted_gif_items = sorted(gif_counts.values(), key=lambda x: int(x.get('total', 0)) if isinstance(x, dict) else 0, reverse=True)
+        top_gifs = sorted_gif_items[:10]  # type: ignore
         stats['gifs'] = []
         for v in top_gifs:
             name = os.path.basename(v['path'])
@@ -760,7 +812,6 @@ def pulse_stats():
         return jsonify(stats)
         
     except Exception as e:
-        import traceback
         traceback.print_exc()
         return jsonify({"error": str(e)}), 500
 
@@ -780,10 +831,11 @@ def chat_dynamics():
     master_key = f"master_v10_{start_date}_{end_date}"
     slider_key = f"dyn_v10_{start_date}_{end_date}_ice{icebreaker_gap}_ghs{ghosting_gap}"
     
-    valid_senders = None
+    valid_senders: Optional[Set[str]] = None
     if sender_param and sender_param != 'all':
         valid_senders = set([s.strip() for s in sender_param.split(',')])
 
+    analytics: Optional[Dict[str, Any]] = None
     try:
         conn = sqlite3.connect(DB_NAME)
         c = conn.cursor()
@@ -792,7 +844,6 @@ def chat_dynamics():
         c.execute("SELECT cache_value FROM statistics_cache WHERE cache_key = ?", (slider_key,))
         row = c.fetchone()
         
-        import json
         if row:
             raw_data = json.loads(row[0])
         else:
@@ -800,7 +851,6 @@ def chat_dynamics():
             c.execute("SELECT cache_value FROM statistics_cache WHERE cache_key = ?", (master_key,))
             m_row = c.fetchone()
             
-            analytics = None
             if m_row:
                 analytics = json.loads(m_row[0])
             
@@ -830,9 +880,8 @@ def chat_dynamics():
                 c.execute(query, params)
                 rows = c.fetchall()
                 
-                from datetime import datetime
                 analytics = {}
-                current_burst_sender = None
+                current_burst_sender: Optional[str] = None
                 current_burst_len = 0
                 current_burst_start_time = None
                 
@@ -848,19 +897,20 @@ def chat_dynamics():
                             'char_lengths': [], 'max_msg': {'len': 0, 'text': '', 'date': ''},
                             'burst_seqs': [], 'burst_freq': {str(k): 0 for k in range(2, 11)}, 'burst_record': {'len': 0, 'date': ''}
                         }
-                        
-                    analytics[sender]['msgs'] += 1
+                    
+                    s_data = analytics[sender]
+                    s_data['msgs'] += 1
                     
                     # Length Analysis
                     if txt and isinstance(txt, str) and txt.strip():
-                        import re
-                        clean_txt = re.sub(r'<[^>]+>', '', txt)
+                        clean_txt: str = re.sub(r'<[^>]+>', '', txt)
                         clean_txt = re.sub(r'http\S+|www\.\S+', '', clean_txt).strip()
-                        txt_len = len(clean_txt)
+                        txt_len: int = len(clean_txt)
                         if txt_len > 0:
-                            analytics[sender]['char_lengths'].append(txt_len)
-                            if txt_len > analytics[sender]['max_msg']['len']:
-                                analytics[sender]['max_msg'] = {'len': txt_len, 'text': clean_txt[:25] + ('...' if len(clean_txt) > 25 else ''), 'date': ts}
+                            s_data['char_lengths'].append(txt_len)
+                            max_msg: Dict[str, Any] = s_data['max_msg']
+                            if isinstance(max_msg, dict) and txt_len > max_msg['len']:
+                                s_data['max_msg'] = {'len': txt_len, 'text': cast(Any, clean_txt)[:25] + ('...' if len(clean_txt) > 25 else ''), 'date': ts}
                     
                     if prev_ts:
                         t_curr = datetime.strptime(ts, "%Y-%m-%d %H:%M:%S")
@@ -868,30 +918,32 @@ def chat_dynamics():
                         delta_seconds = (t_curr - t_prev).total_seconds()
                         delta_hours = delta_seconds / 3600.0
                         
-                        analytics[sender]['icebreaker_records'].append(delta_hours)
+                        s_data['icebreaker_records'].append(delta_hours)
                         if sender != prev_cleaned and prev_cleaned is not None:
-                            analytics[sender]['ghosted_records'].append(delta_seconds)
+                            s_data['ghosted_records'].append(delta_seconds)
                     
                     # Burst Analysis
                     if sender == current_burst_sender:
                         current_burst_len += 1
                     else:
                         if current_burst_sender is not None and current_burst_sender in analytics and current_burst_len > 1:
-                            analytics[current_burst_sender]['burst_seqs'].append(current_burst_len)
+                            prev_s_data = analytics[current_burst_sender]
+                            prev_s_data['burst_seqs'].append(current_burst_len)
                             freq_key = str(min(current_burst_len, 10))
-                            analytics[current_burst_sender]['burst_freq'][freq_key] += 1
-                            if current_burst_len > analytics[current_burst_sender]['burst_record']['len']:
-                                analytics[current_burst_sender]['burst_record'] = {'len': current_burst_len, 'date': current_burst_start_time}
+                            prev_s_data['burst_freq'][freq_key] += 1
+                            if current_burst_len > prev_s_data['burst_record']['len']:
+                                prev_s_data['burst_record'] = {'len': current_burst_len, 'date': current_burst_start_time}
                         current_burst_sender = sender
                         current_burst_len = 1
                         current_burst_start_time = ts
                         
                 if current_burst_sender is not None and current_burst_sender in analytics and current_burst_len > 1:
-                    analytics[current_burst_sender]['burst_seqs'].append(current_burst_len)
+                    last_s_data = analytics[current_burst_sender]
+                    last_s_data['burst_seqs'].append(current_burst_len)
                     freq_key = str(min(current_burst_len, 10))
-                    analytics[current_burst_sender]['burst_freq'][freq_key] += 1
-                    if current_burst_len > analytics[current_burst_sender]['burst_record']['len']:
-                        analytics[current_burst_sender]['burst_record'] = {'len': current_burst_len, 'date': current_burst_start_time}
+                    last_s_data['burst_freq'][freq_key] += 1
+                    if current_burst_len > last_s_data['burst_record']['len']:
+                        last_s_data['burst_record'] = {'len': current_burst_len, 'date': current_burst_start_time}
                 
                 c.execute("INSERT OR REPLACE INTO statistics_cache (cache_key, cache_value) VALUES (?, ?)", 
                           (master_key, json.dumps(analytics)))
@@ -903,48 +955,58 @@ def chat_dynamics():
             i_gap_int = int(icebreaker_gap)
             gap_threshold_s = g_gap_float * 3600
 
-            for sender, d in analytics.items():
-                if d['msgs'] == 0: continue
-                
-                ice_count = sum(1 for h in d['icebreaker_records'] if h >= i_gap_int)
-                ghost_stats = {'insta': 0, 'active': 0, 'delayed': 0, 'ghosted': 0, 'extended': 0}
-                
-                for gap_sex in d['ghosted_records']:
-                    if gap_sex < 30: ghost_stats['insta'] += 1
-                    elif gap_sex < 300: ghost_stats['active'] += 1
-                    elif gap_sex < 3600: ghost_stats['delayed'] += 1
-                    else:
-                        if g_gap_float > 1.05:
-                            if gap_sex < gap_threshold_s: ghost_stats['ghosted'] += 1
-                            else: ghost_stats['extended'] += 1
+            if analytics is not None:
+                # Type safe iteration over the analytics dictionary
+                analytics_map = cast(Dict[str, Dict[str, Any]], analytics)
+                for sender, d_raw in analytics_map.items():
+                    d = cast(Dict[str, Any], d_raw)
+                    if d.get('msgs', 0) == 0: continue
+                    
+                    # Resolve icebreaker records
+                    i_records = cast(List[int], d.get('icebreaker_records', []))
+                    ice_count: int = sum(1 for h in i_records if h >= i_gap_int)
+                    
+                    ghost_stats: Dict[str, int] = {'insta': 0, 'active': 0, 'delayed': 0, 'ghosted': 0, 'extended': 0}
+                    g_records = cast(List[float], d.get('ghosted_records', []))
+                    for gap_sex in g_records:
+                        if gap_sex < 30: ghost_stats['insta'] += 1
+                        elif gap_sex < 300: ghost_stats['active'] += 1
+                        elif gap_sex < 3600: ghost_stats['delayed'] += 1
                         else:
-                            ghost_stats['ghosted'] += 1
-                            
-                total_responses = len(d['ghosted_records'])
-                ghost_stats_with_pct = {}
-                for k, count in ghost_stats.items():
-                    ghost_stats_with_pct[k] = {
-                        'count': count,
-                        'pct': round((count / total_responses) * 100, 2) if total_responses > 0 else 0
+                            if g_gap_float > 1.05:
+                                if gap_sex < gap_threshold_s: ghost_stats['ghosted'] += 1
+                                else: ghost_stats['extended'] += 1
+                            else:
+                                ghost_stats['ghosted'] += 1
+                                
+                    total_responses: int = len(g_records)
+                    ghost_stats_with_pct: Dict[str, Dict[str, Any]] = {}
+                    for k, count in ghost_stats.items():
+                        ghost_stats_with_pct[k] = {
+                            'count': count,
+                            'pct': float(int((count / total_responses) * 10000) / 100.0) if total_responses > 0 else 0.0
+                        }
+                    
+                    c_lengths = cast(List[int], d.get('char_lengths', []))
+                    avg_len: float = float(int(sum(c_lengths) / len(c_lengths) * 10) / 10.0) if c_lengths else 0.0
+                    
+                    b_seqs = cast(List[int], d.get('burst_seqs', []))
+                    total_burst_msgs: int = sum(b_seqs)
+                    avg_burst: float = float(int(total_burst_msgs / len(b_seqs) * 10) / 10.0) if b_seqs else 1.0
+                    burst_ratio: float = float(int((total_burst_msgs / int(d.get('msgs', 1))) * 1000) / 10.0) if int(d.get('msgs', 0)) > 0 else 0.0
+                    
+                    final_data[sender] = {
+                        'msgs': d.get('msgs', 0),
+                        'icebreakers': ice_count,
+                        'ghost_stats': ghost_stats_with_pct,
+                        'total_ghost_records': total_responses,
+                        'avg_length': avg_len,
+                        'max_msg': d.get('max_msg'),
+                        'burst_ratio': burst_ratio,
+                        'avg_burst': avg_burst,
+                        'burst_record': d.get('burst_record'),
+                        'burst_freq': d.get('burst_freq')
                     }
-                
-                avg_len = round((sum(d['char_lengths']) / len(d['char_lengths'])) if d['char_lengths'] else 0, 1)
-                total_burst_msgs = sum(d['burst_seqs'])
-                avg_burst = round(total_burst_msgs / len(d['burst_seqs']), 1) if d['burst_seqs'] else 1.0
-                burst_ratio = round((total_burst_msgs / d['msgs']) * 100, 1) if d['msgs'] > 0 else 0
-                
-                final_data[sender] = {
-                    'msgs': d['msgs'],
-                    'icebreakers': ice_count,
-                    'ghost_stats': ghost_stats_with_pct,
-                    'total_ghost_records': total_responses,
-                    'avg_length': avg_len,
-                    'max_msg': d['max_msg'],
-                    'burst_ratio': burst_ratio,
-                    'avg_burst': avg_burst,
-                    'burst_record': d['burst_record'],
-                    'burst_freq': d['burst_freq']
-                }
                 
             raw_data = final_data
             c.execute("INSERT OR REPLACE INTO statistics_cache (cache_key, cache_value) VALUES (?, ?)", 
@@ -961,20 +1023,29 @@ def chat_dynamics():
         return jsonify(filtered_data)
         
     except Exception as e:
-        import traceback
         traceback.print_exc()
         return jsonify({"error": str(e)}), 500
         
-def open_browser():
-      webbrowser.open_new("http://127.0.0.1:5000")
+def open_browser(port: int = 5000):
+      webbrowser.open_new(f"http://127.0.0.1:{port}")
 
 if __name__ == '__main__':
+    parser = argparse.ArgumentParser(description="Telegram Search App Web UI")
+    parser.add_argument("--host", default="127.0.0.1", help="Bind address (default: 127.0.0.1)")
+    parser.add_argument("--port", type=int, default=5000, help="Port number (default: 5000)")
+    parser.add_argument("--db", default=DEFAULT_DB_NAME, help=f"Path to the database file (default: {DEFAULT_DB_NAME})")
+    parser.add_argument("--debug", action="store_true", help="Enable Flask debug mode")
+    
+    args = parser.parse_args()
+    DB_NAME = args.db
+    
     upgrade_db()
     
     if not os.environ.get("WERKZEUG_RUN_MAIN"):
         print("\n[SERVER] Launching browser...")
-        Timer(0.5, open_browser).start()
+        Timer(0.5, open_browser, [args.port]).start()
         
     print(f"\n[SERVER] Serving UI from: {BASE_DIR}")
-    print("Open your browser to: http://127.0.0.1:5000\n")
-    app.run(debug=True, port=5000)
+    print(f"[SERVER] Database: {DB_NAME}")
+    print(f"Open your browser to: http://{args.host}:{args.port}\n")
+    app.run(host=args.host, port=args.port, debug=args.debug)
