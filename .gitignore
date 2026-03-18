@@ -1,2 +1,4 @@
 *.db
 pyrightconfig.json
+static/avatars/
+.vscode
