@@ -167,9 +167,18 @@
                 <div id="circ-panel-weekly" class="pulse-chart-container" style="display: none;"><canvas id="weeklyChart"></canvas></div>
             </div>
             
-            <div class="pulse-card pulse-g-wide">
-                <h3 class="pulse-card-title">Consistency Grid 📅</h3>
-                <div class="pulse-consistency-container" id="consistencyGrid"></div>
+            <div class="pulse-card pulse-g-wide" id="consistencyCard">
+                <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 10px;">
+                    <h3 class="pulse-card-title" style="margin-bottom: 0;">Consistency Grid 📅</h3>
+                    <div class="cw-view-toggle" style="display: flex; align-items: center;">
+                        <span id="ps-hover-month" style="display: none; margin-right: 12px; font-size: 12px; font-weight: 500; color: rgba(255,255,255,0.5);"></span>
+                        <button class="cw-view-btn active" data-cgmode="matrix" onclick="switchCgMode('matrix')">📅 Time Matrix</button>
+                        <button class="cw-view-btn" data-cgmode="stream" onclick="switchCgMode('stream')">💬 Pulse Stream</button>
+                    </div>
+                </div>
+                <div id="cg-time-matrix" style="flex: 1; overflow: auto;"></div>
+                <div id="cg-pulse-stream" class="ps-container" style="display: none;"></div>
+                <div id="cg-tooltip" class="cg-rich-tooltip" style="display: none;"></div>
             </div>
             
             <div class="pulse-card pulse-g-medium">
@@ -256,7 +265,11 @@
                         </div>
                         <div style="display: flex; align-items: center; justify-content: space-between; gap: 10px;">
                             <span>Min. Usage:</span>
-                            <input type="number" id="pulse-word-min" min="1" value="5" style="width: 60px; background: rgba(255,255,255,0.1); border: 1px solid var(--glass-border); color: white; border-radius: 4px; padding: 2px 5px; outline: none;">
+                            <div style="display: flex; gap: 10px;">
+                                <input type="number" id="pulse-word-min" min="1" value="5" style="width: 50px; background: rgba(255,255,255,0.1); border: 1px solid var(--glass-border); color: white; border-radius: 4px; padding: 2px 5px; outline: none;">
+                                <span style="display:flex;align-items:center;">–</span>
+                                <input type="number" id="pulse-word-max" min="1" value="1000" style="width: 50px; background: rgba(255,255,255,0.1); border: 1px solid var(--glass-border); color: white; border-radius: 4px; padding: 2px 5px; outline: none;" title="Max. Usage">
+                            </div>
                         </div>
                         <button class="pulse-btn" style="padding: 4px 8px; font-size: 11px; width: 100%; margin-top: 5px;" onclick="recomputeAndRender()">Apply Filters</button>
                     </div>

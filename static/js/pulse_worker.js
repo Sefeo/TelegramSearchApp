@@ -33,7 +33,7 @@ function filterMessages(messages, senderSet, isAllSenders, startDate, endDate) {
     });
 }
 
-function computePulseStats(messages, maxNGram, minUsage, targetPct) {
+function computePulseStats(messages, maxNGram, minUsage, maxUsage, targetPct) {
     const stats = {};
 
     // Pre-initialize buckets
@@ -52,8 +52,11 @@ function computePulseStats(messages, maxNGram, minUsage, targetPct) {
     const stickerCounts = {};
     const gifCounts = {};
 
+    let msgIdCounter = 0;
+
     // === SINGLE PASS ===
     for (const msg of messages) {
+        msgIdCounter++;
         const s = msg.s;
 
         // Sender count
@@ -64,7 +67,9 @@ function computePulseStats(messages, maxNGram, minUsage, targetPct) {
             if (hours[h]) { hours[h].total++; hours[h].senders[s] = (hours[h].senders[s] || 0) + 1; }
 
             const d = msg.t.substring(0, 10);
-            consistency[d] = (consistency[d] || 0) + 1;
+            if (!consistency[d]) consistency[d] = { total: 0, senders: {} };
+            consistency[d].total++;
+            consistency[d].senders[s] = (consistency[d].senders[s] || 0) + 1;
 
             // Day of week — arithmetic instead of new Date()
             const yr = (msg.t.charCodeAt(0) - 48) * 1000 + (msg.t.charCodeAt(1) - 48) * 100 + (msg.t.charCodeAt(2) - 48) * 10 + (msg.t.charCodeAt(3) - 48);
@@ -130,8 +135,8 @@ function computePulseStats(messages, maxNGram, minUsage, targetPct) {
                         if (!wordCounts[phrase]) {
                             wordCounts[phrase] = { total: 0, senders: {}, msgIds: new Set(), len: n };
                         }
-                        if (!wordCounts[phrase].msgIds.has(msg.i)) {
-                            wordCounts[phrase].msgIds.add(msg.i);
+                        if (!wordCounts[phrase].msgIds.has(msgIdCounter)) {
+                            wordCounts[phrase].msgIds.add(msgIdCounter);
                             wordCounts[phrase].total++;
                             wordCounts[phrase].senders[s] = (wordCounts[phrase].senders[s] || 0) + 1;
                         }
@@ -143,7 +148,8 @@ function computePulseStats(messages, maxNGram, minUsage, targetPct) {
 
     // === POST-PROCESSING ===
 
-    // 1. Min Usage Filter
+    // 1. Min Usage Filter (Critical Performance optimization)
+    // Moving this back to the top reduces the dataset from 200k+ down to ~5k entries before expensive loops.
     for (const w of Object.keys(wordCounts)) {
         if (wordCounts[w].total < minUsage) delete wordCounts[w];
     }
@@ -152,6 +158,10 @@ function computePulseStats(messages, maxNGram, minUsage, targetPct) {
     {
         const templateGroups = new Map();
         for (const [phrase, data] of Object.entries(wordCounts)) {
+            // Optimization: Skip single words (deduplication is for phrases) and extremely high frequency words
+            // to avoid string allocations for massive msgIds sets.
+            if (data.len === 1 || data.total > 1000) continue;
+
             const fp = [...data.msgIds].sort((a, b) => a - b).join(',');
             if (!templateGroups.has(fp)) templateGroups.set(fp, []);
             templateGroups.get(fp).push(phrase);
@@ -188,11 +198,11 @@ function computePulseStats(messages, maxNGram, minUsage, targetPct) {
     stats.sender_battle = Object.entries(senderCounts).sort((a, b) => b[1] - a[1]).map(([name, count]) => ({ name, count }));
     stats.emojis = Object.entries(emojiCounts).sort((a, b) => b[1].total - a[1].total).slice(0, 10).map(([emoji, data]) => ({ emoji, count: data.total, senders: data.senders }));
 
-    // Display Filter: strict exact-length match
+    // Global Array: sorted by length requested by user
     const displayMinLen = maxNGram;
-
     let candidates = Object.entries(wordCounts).filter(([, data]) => data.len === displayMinLen);
 
+    // The Guillotine: Chop off Top X%
     if (targetPct < 1.0 && candidates.length > 0) {
         const sortedCandidates = candidates.sort((a, b) => b[1].total - a[1].total);
         const totalOccurrences = sortedCandidates.reduce((sum, item) => sum + item[1].total, 0);
@@ -201,10 +211,14 @@ function computePulseStats(messages, maxNGram, minUsage, targetPct) {
         const filtered = [];
         for (const entry of sortedCandidates) {
             cumulative += entry[1].total;
+            // Only push words falling below the "boring" top percentile cutoff
             if (cumulative > cutoffThreshold) filtered.push(entry);
         }
         candidates = filtered;
     }
+
+    // The Tweezers: Min / Max usage bounds
+    candidates = candidates.filter(([, data]) => data.total >= minUsage && data.total <= maxUsage);
 
     stats.words = candidates.sort((a, b) => b[1].total - a[1].total).slice(0, 15).map(([word, data]) => ({ word, count: data.total, senders: data.senders }));
 
@@ -239,12 +253,12 @@ self.onmessage = function (e) {
             return;
         }
 
-        const { senders, allSendersCount, startDate, endDate, maxNGram, minUsage, targetPct } = e.data;
+        const { senders, allSendersCount, startDate, endDate, maxNGram, minUsage, maxUsage, targetPct } = e.data;
         const senderSet = new Set(senders);
         const isAllSenders = senderSet.size === allSendersCount;
 
         const filtered = filterMessages(_workerMessages, senderSet, isAllSenders, startDate, endDate);
-        const stats = computePulseStats(filtered, maxNGram, minUsage, targetPct);
+        const stats = computePulseStats(filtered, maxNGram, minUsage, maxUsage, targetPct);
 
         // Carry over meta info
         if (_workerMeta) {
