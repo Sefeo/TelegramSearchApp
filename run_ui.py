@@ -474,6 +474,17 @@ def get_avatar(sender: str):
         
     return send_file(svg_path) if os.path.exists(svg_path) else "Error", 200
     
+def get_db_signature() -> str:
+    try:
+        stat = os.stat(DB_NAME)
+        return f"{stat.st_size}_{stat.st_mtime}"
+    except Exception:
+        return "unknown"
+
+@app.route('/api/db_sig', methods=['GET'])
+def db_sig_endpoint():
+    return jsonify({"db_sig": get_db_signature()})
+
 @app.route('/api/pinned', methods=['GET'])
 def get_pinned():
     try:
@@ -495,8 +506,13 @@ def pulse_raw():
     Uses in-memory cache so subsequent requests skip the DB query entirely."""
     global _pulse_raw_cache
     
+    current_sig = get_db_signature()
+    
     if _pulse_raw_cache is not None:
-        return jsonify(_pulse_raw_cache)
+        if _pulse_raw_cache.get('db_sig') == current_sig:
+            return jsonify(_pulse_raw_cache)
+        else:
+            _pulse_raw_cache = None
     
     try:
         conn = sqlite3.connect(DB_NAME)
@@ -539,6 +555,8 @@ def pulse_raw():
         if min_ts and max_ts:
             result['min_date'] = min_ts[:10]
             result['max_date'] = max_ts[:10]
+        
+        result['db_sig'] = current_sig
         
         # Cache in memory for subsequent requests
         _pulse_raw_cache = result

@@ -190,9 +190,32 @@ async function initPulse() {
 async function loadRawDataAndRender() {
     showPulseLoader();
 
+    // 0. Fetch db_sig from standard API to invalidate cache if DB changed
+    let serverSig = null;
+    try {
+        const sigRes = await fetch('/api/db_sig');
+        if (sigRes.ok) {
+            const sigData = await sigRes.json();
+            serverSig = sigData.db_sig;
+        }
+    } catch (e) {
+        console.warn("Could not fetch db_sig", e);
+    }
+
     // 1. Try IndexedDB cache first (no 5MB cap, survives browser close)
     const cached = await idbGet();
+    
+    let useCache = false;
     if (cached) {
+        if (serverSig) {
+            if (cached.db_sig === serverSig) useCache = true;
+        } else {
+            // Fallback if server db_sig endpoint failed purely due to network
+            useCache = true;
+        }
+    }
+
+    if (useCache) {
         pulseRawMessages = cached.messages;
         pulseRawMeta = { min_date: cached.min_date, max_date: cached.max_date };
         if (pulseMonths.length === 0 && pulseRawMeta.min_date && pulseRawMeta.max_date) {
