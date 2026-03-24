@@ -259,4 +259,57 @@ self.onmessage = function (e) {
         self.postMessage({ type: 'result', stats });
         return;
     }
+
+    if (type === 'custom_words') {
+        if (!_workerMessages) {
+            self.postMessage({ type: 'error', msg: 'Worker has no data — send load first' });
+            return;
+        }
+
+        const { words, senders, allSendersCount, startDate, endDate } = e.data;
+        const senderSet = new Set(senders);
+        const isAllSenders = senderSet.size === allSendersCount;
+        const filtered = filterMessages(_workerMessages, senderSet, isAllSenders, startDate, endDate);
+
+        // Build word-boundary-aware regexes (Cyrillic-safe: \b doesn't work for Cyrillic)
+        const regexes = words.map(w => {
+            const escaped = w.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+            // Use Unicode Letter class for boundaries: match if NOT preceded/followed by a letter
+            try {
+                return { word: w, re: new RegExp('(?<!\\p{L})' + escaped + '(?!\\p{L})', 'giu') };
+            } catch (e) {
+                // Fallback for environments without lookbehind
+                return { word: w, re: new RegExp(escaped, 'gi') };
+            }
+        });
+
+        const results = regexes.map(({ word, re }) => {
+            const senderData = {};
+            let total = 0;
+
+            for (const msg of filtered) {
+                if (!msg.x) continue;
+                re.lastIndex = 0;
+                const matches = msg.x.match(re);
+                if (!matches) continue;
+                const count = matches.length;
+                total += count;
+                const s = msg.s;
+
+                if (!senderData[s]) {
+                    senderData[s] = { count: 0, first_date: msg.t ? msg.t.substring(0, 10) : null };
+                }
+                senderData[s].count += count;
+                // Track earliest occurrence
+                if (msg.t && (!senderData[s].first_date || msg.t.substring(0, 10) < senderData[s].first_date)) {
+                    senderData[s].first_date = msg.t.substring(0, 10);
+                }
+            }
+
+            return { word, total, senders: senderData };
+        });
+
+        self.postMessage({ type: 'custom_words_result', results });
+        return;
+    }
 };

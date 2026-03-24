@@ -232,33 +232,57 @@
             </div>
             
             <div class="pulse-card pulse-g-tall" id="wordsCard" style="display: flex; flex-direction: column;">
-                <h3 class="pulse-card-title" style="margin-bottom: 10px;">Signature Words 🔠</h3>
+                <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 10px;">
+                    <h3 class="pulse-card-title" style="margin-bottom: 0;">Signature Words 🔠</h3>
+                    <div class="sigwords-tabs">
+                        <button class="sigwords-tab active" data-tab="pct" onclick="switchSigWordsTab('pct')">Percentage</button>
+                        <button class="sigwords-tab" data-tab="custom" onclick="switchSigWordsTab('custom')">Custom</button>
+                    </div>
+                </div>
                 
-                <div style="display: flex; flex-direction: column; gap: 8px; font-size: 12px; color: var(--pulse-text-muted); background: rgba(0,0,0,0.2); padding: 10px; border-radius: 8px; margin-bottom: 15px;">
-                    <div style="display: flex; align-items: center; justify-content: space-between; gap: 10px;">
-                        <span>Top Percent:</span>
-                        <div style="display: flex; align-items: center; flex: 1;">
-                            <input type="range" id="pulse-word-pct" min="1" max="100" value="10" style="width: 100%;">
-                            <span id="pulse-word-pct-val" style="width: 35px; text-align: right; font-weight: bold;">10%</span>
+                <!-- Percentage panel (existing content) -->
+                <div id="sigwords-panel-pct" style="display: flex; flex-direction: column; flex: 1; min-height: 0;">
+                    <div style="display: flex; flex-direction: column; gap: 8px; font-size: 12px; color: var(--pulse-text-muted); background: rgba(0,0,0,0.2); padding: 10px; border-radius: 8px; margin-bottom: 15px;">
+                        <div style="display: flex; align-items: center; justify-content: space-between; gap: 10px;">
+                            <span>Top Percent:</span>
+                            <div style="display: flex; align-items: center; flex: 1;">
+                                <input type="range" id="pulse-word-pct" min="1" max="100" value="10" style="width: 100%;">
+                                <span id="pulse-word-pct-val" style="width: 35px; text-align: right; font-weight: bold;">10%</span>
+                            </div>
                         </div>
+                        <div style="display: flex; align-items: center; justify-content: space-between; gap: 10px;">
+                            <span>Phrase Length:</span>
+                            <input type="number" id="pulse-phrase-len" min="1" max="5" value="1" style="width: 60px; background: rgba(255,255,255,0.1); border: 1px solid var(--glass-border); color: white; border-radius: 4px; padding: 2px 5px; outline: none;">
+                        </div>
+                        <div style="display: flex; align-items: center; justify-content: space-between; gap: 10px;">
+                            <span>Min. Usage:</span>
+                            <input type="number" id="pulse-word-min" min="1" value="5" style="width: 60px; background: rgba(255,255,255,0.1); border: 1px solid var(--glass-border); color: white; border-radius: 4px; padding: 2px 5px; outline: none;">
+                        </div>
+                        <button class="pulse-btn" style="padding: 4px 8px; font-size: 11px; width: 100%; margin-top: 5px;" onclick="recomputeAndRender()">Apply Filters</button>
                     </div>
-                    <div style="display: flex; align-items: center; justify-content: space-between; gap: 10px;">
-                        <span>Phrase Length:</span>
-                        <input type="number" id="pulse-phrase-len" min="1" max="5" value="1" style="width: 60px; background: rgba(255,255,255,0.1); border: 1px solid var(--glass-border); color: white; border-radius: 4px; padding: 2px 5px; outline: none;">
-                    </div>
-                    <div style="display: flex; align-items: center; justify-content: space-between; gap: 10px;">
-                        <span>Min. Usage:</span>
-                        <input type="number" id="pulse-word-min" min="1" value="5" style="width: 60px; background: rgba(255,255,255,0.1); border: 1px solid var(--glass-border); color: white; border-radius: 4px; padding: 2px 5px; outline: none;">
-                    </div>
-                    <button class="pulse-btn" style="padding: 4px 8px; font-size: 11px; width: 100%; margin-top: 5px;" onclick="recomputeAndRender()">Apply Filters</button>
+
+                    <div class="pulse-word-cloud" id="signatureWords" style="flex: 1; overflow-y: auto;"></div>
+                    <script>
+                        document.getElementById('pulse-word-pct').addEventListener('input', e => {
+                            document.getElementById('pulse-word-pct-val').textContent = e.target.value + '%';
+                        });
+                    </script>
                 </div>
 
-                <div class="pulse-word-cloud" id="signatureWords" style="flex: 1; overflow-y: auto;"></div>
-                <script>
-                    document.getElementById('pulse-word-pct').addEventListener('input', e => {
-                        document.getElementById('pulse-word-pct-val').textContent = e.target.value + '%';
-                    });
-                </script>
+                <!-- Custom panel (new) -->
+                <div id="sigwords-panel-custom" style="display: none; flex-direction: column; flex: 1; min-height: 0; gap: 10px;">
+                    <input type="text" class="cw-input" id="cw-input" placeholder="Type a word or phrase and press Enter...">
+                    <div style="display: flex; justify-content: space-between; align-items: flex-start; gap: 10px;">
+                        <div class="cw-tags" id="cw-tags"></div>
+                        <div class="cw-view-toggle" id="cw-view-toggle">
+                            <button class="cw-view-btn active" data-mode="tug" onclick="switchCwView('tug')">📊 Tug of War</button>
+                            <button class="cw-view-btn" data-mode="matrix" onclick="switchCwView('matrix')">🎛️ Matrix</button>
+                        </div>
+                    </div>
+                    <div id="cw-viz" style="flex: 1; overflow-y: auto; min-height: 0;">
+                        <div class="cw-empty">Type a word above to see who uses it most ✨</div>
+                    </div>
+                </div>
             </div>
             
             <div class="pulse-card pulse-g-tall" id="stickerCard">
