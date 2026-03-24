@@ -756,6 +756,33 @@
     border-radius: 8px;
 }
 
+/* Expanded Matrix Layout */
+.pulse-expanded .matrix-grid {
+    gap: 16px;
+    padding: 25px;
+}
+
+.pulse-expanded .matrix-orb {
+    width: 70px;
+    height: 70px;
+    font-size: 16px;
+}
+
+.pulse-expanded .matrix-header-cell img {
+    width: 44px;
+    height: 44px;
+}
+
+.pulse-expanded .matrix-header-cell span {
+    font-size: 13px;
+    max-width: 90px;
+}
+
+.pulse-expanded .matrix-row-label {
+    font-size: 16px;
+    padding-right: 15px;
+}
+
 /* ========== Empty / hint state ========== */
 .cw-empty {
     display: flex;
