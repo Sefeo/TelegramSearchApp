@@ -178,9 +178,45 @@ function togglePulseDashboard() {
         if (!pulseRawMessages) {
             initPulse();
         }
+        injectExpandButtons();
     } else {
         dash.classList.add('pulse-hidden');
     }
+}
+
+function injectExpandButtons() {
+    document.querySelectorAll('.pulse-card').forEach(card => {
+        if (card.querySelector('.pulse-expand-btn')) return; // already injected
+        const btn = document.createElement('button');
+        btn.className = 'pulse-expand-btn';
+        btn.title = 'Expand card';
+        btn.innerHTML = '⛶';
+        btn.onclick = (e) => {
+            e.stopPropagation();
+            toggleCardExpand(card, btn);
+        };
+        card.appendChild(btn);
+    });
+}
+
+function toggleCardExpand(card, btn) {
+    const expanding = !card.classList.contains('pulse-expanded');
+    card.classList.toggle('pulse-expanded');
+    btn.innerHTML = expanding ? '⛌' : '⛶';
+    btn.title = expanding ? 'Collapse card' : 'Expand card';
+
+    // If expanding, scroll the card into view
+    if (expanding) {
+        setTimeout(() => card.scrollIntoView({ behavior: 'smooth', block: 'start' }), 100);
+    }
+
+    // Resize Chart.js canvases inside the card after transition
+    setTimeout(() => {
+        card.querySelectorAll('canvas').forEach(c => {
+            const chartInstance = Chart.getChart(c);
+            if (chartInstance) chartInstance.resize();
+        });
+    }, 400);
 }
 
 async function initPulse() {
