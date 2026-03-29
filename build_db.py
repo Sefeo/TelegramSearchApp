@@ -233,6 +233,14 @@ def parse_folder(conn, folder_path, folder_name):
                                       (folder_name, file, "System", msg_date, text, 'service'))
                             total += 1
 
+        # Link replies for this specific file
+        print(f"    Linking replies for {file}...")
+        c.execute('''UPDATE messages 
+                     SET reply_to_id = (SELECT id FROM messages m2 WHERE m2.tg_id = messages.reply_to_tg_id) 
+                     WHERE source_folder = ? AND file_name = ? AND reply_to_tg_id IS NOT NULL AND reply_to_id IS NULL''', 
+                  (folder_name, file))
+        conn.commit()
+
     # --- 4. Final Processing ---
     if pinned_tg_ids:
         placeholders = ','.join(['?'] * len(pinned_tg_ids))
@@ -336,13 +344,7 @@ if __name__ == "__main__":
         folder_name = os.path.basename(folder) if i == 0 else f"Linked_{i}"
         total_indexed += parse_folder(db_connection, folder, folder_name)
 
-    # 5. Final Processing
-    print("\nLinking replies...")
-    c = db_connection.cursor()
-    c.execute('''UPDATE messages SET reply_to_id = (SELECT id FROM messages m2 WHERE m2.tg_id = messages.reply_to_tg_id) WHERE reply_to_tg_id IS NOT NULL''')
-    db_connection.commit()
-    
-    # 6. Final Summary
+    # 5. Final Summary
     print(f"\nSuccess! Indexed {total_indexed} messages.")
     print(f"Database saved to: {DB_PATH}")
     print("\n[!] IMPORTANT: Do NOT change the path of linked Telegram exported chats.")
