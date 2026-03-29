@@ -239,6 +239,20 @@
                         </div>`;
                 }
 				
+				// 5. FORWARDED HEADER
+                let fwdHtml = '';
+                if (msg.forwarded_from && msg.media_type !== 'service') {
+                    const fwdAvatarUrl = `/avatar/${encodeURIComponent(msg.forwarded_from)}`;
+                    fwdHtml = `
+                        <div class="fwd-header">
+                            <img class="fwd-avatar" src="${fwdAvatarUrl}">
+                            <div class="fwd-info">
+                                <div class="fwd-name" style="color: ${getColor(msg.forwarded_from)};">${msg.forwarded_from}</div>
+                                <div class="fwd-date">${msg.forwarded_date || ''}</div>
+                            </div>
+                        </div>`;
+                }
+
 				// 6. BUILD FINAL HTML
                 const pinDot = msg.is_pinned ? `<div class="pin-indicator" title="Pinned Message"></div>` : '';
                 
@@ -253,6 +267,7 @@
                             ${pinDot}
                             ${showHeader ? `<div class="sender" style="color: ${getColor(msg.sender)};">${msg.sender}</div>` : ''}
                             ${typeof replyHtml !== 'undefined' ? replyHtml : ''}
+                            ${fwdHtml}
                             ${mediaHtml}
                             ${textToRender ? `<div class="text">${textToRender} <span class="time">${timeStr}</span></div>` : (isFrameless ? `<span class="time">${timeStr}</span>` : '')}
                         </div>

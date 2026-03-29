@@ -371,6 +371,13 @@ def upgrade_db():
         pass # Column already exists
         
     try:
+        c.execute("ALTER TABLE messages ADD COLUMN forwarded_from TEXT")
+        c.execute("ALTER TABLE messages ADD COLUMN forwarded_date TEXT")
+        print("[DB] Upgraded database: Added forwarded message columns.")
+    except Exception:
+        pass # Columns already exist
+        
+    try:
         c.execute("CREATE TABLE IF NOT EXISTS statistics_cache (cache_key TEXT PRIMARY KEY, cache_value TEXT, updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP)")
         c.execute("CREATE TABLE IF NOT EXISTS media_sizes_cache (media_path TEXT PRIMARY KEY, size INTEGER)")
         
@@ -492,7 +499,8 @@ def get_pinned():
         conn.row_factory = dict_factory
         c = conn.cursor()
         # Fetch all pinned messages in chronological order
-        c.execute('''SELECT id, sender, text_content, media_type, media_path, timestamp 
+        c.execute('''SELECT id, sender, text_content, media_type, media_path, timestamp, 
+                            forwarded_from, forwarded_date 
                      FROM messages WHERE is_pinned = 1 ORDER BY timestamp ASC''')
         results = c.fetchall()
         conn.close()

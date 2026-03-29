@@ -26,6 +26,7 @@ def setup_database(db_path):
                   sender TEXT, timestamp DATETIME, 
                   text_content TEXT, media_path TEXT, media_type TEXT,
                   tg_id TEXT, reply_to_tg_id TEXT, reply_to_id INTEGER,
+                  forwarded_from TEXT, forwarded_date TEXT,
                   is_pinned INTEGER DEFAULT 0,
                   waveform TEXT)''')
     
@@ -129,6 +130,20 @@ def parse_folder(conn, folder_path, folder_name):
                             match = MESSAGE_ID_RE.search(a_tag['href'])
                             if match: reply_to_tg_id = match.group(0)
 
+                    # Forwarding Info
+                    forwarded_from = None
+                    forwarded_date = None
+                    fwd_div = msg.find('div', class_='forwarded body')
+                    if fwd_div:
+                        fwd_name_div = fwd_div.find('div', class_='from_name')
+                        if fwd_name_div:
+                            # Extract name, avoiding text inside span tags
+                            forwarded_from = "".join(fwd_name_div.find_all(string=True, recursive=False)).strip()
+                            # Extract date from span
+                            fwd_date_span = fwd_name_div.find('span', class_='date')
+                            if fwd_date_span:
+                                forwarded_date = fwd_date_span.get('title') or fwd_date_span.text.strip()
+
                     # Rich Text
                     text_content = ""
                     text_div = msg.find('div', class_='text')
@@ -214,7 +229,8 @@ def parse_folder(conn, folder_path, folder_name):
                                 break 
 
                     normal_msgs_batch.append((folder_name, file, current_sender, msg_date, text_content, 
-                                              media_path, media_type, tg_id, reply_to_tg_id))
+                                              media_path, media_type, tg_id, reply_to_tg_id, 
+                                              forwarded_from, forwarded_date))
                     total += 1
 
                 # --- 3. System Messages ---
@@ -235,19 +251,20 @@ def parse_folder(conn, folder_path, folder_name):
                                     match = MESSAGE_ID_RE.search(a_tag['href'])
                                     if match: pinned_tg_ids.add(match.group(0))
 
-                            sys_msgs_batch.append((folder_name, file, "System", msg_date, text, 'service'))
+                            sys_msgs_batch.append((folder_name, file, "System", msg_date, text, 'service', 'Forwarded Information'))
                             total += 1
 
         # Execute batched inserts
         if normal_msgs_batch:
             c.executemany("""INSERT INTO messages 
                              (source_folder, file_name, sender, timestamp, text_content, 
-                              media_path, media_type, tg_id, reply_to_tg_id) 
-                             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)""", normal_msgs_batch)
+                              media_path, media_type, tg_id, reply_to_tg_id, 
+                              forwarded_from, forwarded_date) 
+                             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""", normal_msgs_batch)
         if sys_msgs_batch:
             c.executemany("""INSERT INTO messages 
-                             (source_folder, file_name, sender, timestamp, text_content, media_type) 
-                             VALUES (?, ?, ?, ?, ?, ?)""", sys_msgs_batch)
+                             (source_folder, file_name, sender, timestamp, text_content, media_type, forwarded_from) 
+                             VALUES (?, ?, ?, ?, ?, ?, ?)""", sys_msgs_batch)
 
         # Link replies for this specific file
         c.execute('''UPDATE messages 

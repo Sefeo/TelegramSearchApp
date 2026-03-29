@@ -271,6 +271,20 @@
         .reply-thumb { width: 32px; height: 32px; border-radius: 4px; object-fit: cover; margin-right: 8px; flex-shrink: 0; background: #000; }
         .reply-content { flex-grow: 1; overflow: hidden; display: flex; flex-direction: column; min-width: 0;}
 
+        /* Forwarded Message Header */
+        .fwd-header {
+            display: flex;
+            align-items: center;
+            gap: 8px;
+            margin-bottom: 5px;
+            border-left: 2px solid var(--accent);
+            padding-left: 8px;
+        }
+        .fwd-avatar { width: 28px; height: 28px; border-radius: 50%; flex-shrink: 0; }
+        .fwd-info { display: flex; flex-direction: column; min-width: 0; }
+        .fwd-name { font-weight: bold; font-size: 13px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+        .fwd-date { font-size: 11px; color: var(--text-muted); }
+
         /* Main Chat Area */
         .chat-container { flex-grow: 1; overflow-y: auto; padding: 60px 20%; display: flex; flex-direction: column; }
         .msg-row { display: flex; margin-bottom: 8px; align-items: flex-end; }
