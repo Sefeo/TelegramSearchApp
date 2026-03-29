@@ -35,6 +35,11 @@ def setup_database(db_path):
     c.execute("CREATE INDEX IF NOT EXISTS idx_messages_media_type ON messages(media_type)")
     c.execute("CREATE INDEX IF NOT EXISTS idx_messages_is_pinned ON messages(is_pinned)")
     
+    # Critical indexes for reply linking performance
+    c.execute("CREATE INDEX IF NOT EXISTS idx_messages_tg_id ON messages(tg_id)")
+    c.execute("CREATE INDEX IF NOT EXISTS idx_messages_reply_to_tg_id ON messages(reply_to_tg_id)")
+    c.execute("CREATE INDEX IF NOT EXISTS idx_messages_source_file ON messages(source_folder, file_name)")
+    
     conn.commit()
     return conn
 
@@ -234,7 +239,6 @@ def parse_folder(conn, folder_path, folder_name):
                             total += 1
 
         # Link replies for this specific file
-        print(f"    Linking replies for {file}...")
         c.execute('''UPDATE messages 
                      SET reply_to_id = (SELECT id FROM messages m2 WHERE m2.tg_id = messages.reply_to_tg_id) 
                      WHERE source_folder = ? AND file_name = ? AND reply_to_tg_id IS NOT NULL AND reply_to_id IS NULL''', 
