@@ -275,31 +275,127 @@
             document.getElementById('selection-bar').style.display = 'none';
         }
 
-        function copySelected() {
+        async function transcribeAudioFile(fileUrl, msgId) {
+            return new Promise(async (resolve, reject) => {
+                if (!whisperWorker || !whisperReady) {
+                    resolve("[Transcription unavailable - model not ready]");
+                    return;
+                }
+
+                try {
+                    // Fetch and decode the audio file to Float32Array (16kHz)
+                    const response = await fetch(fileUrl);
+                    const arrayBuffer = await response.arrayBuffer();
+                    
+                    const audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+                    const audioBuffer = await audioCtx.decodeAudioData(arrayBuffer);
+                    
+                    let targetSampleRate = 16000;
+                    const offlineCtx = new OfflineAudioContext(1, audioBuffer.duration * targetSampleRate, targetSampleRate);
+                    const source = offlineCtx.createBufferSource();
+                    source.buffer = audioBuffer;
+                    source.connect(offlineCtx.destination);
+                    source.start(0);
+                    
+                    const resampledBuffer = await offlineCtx.startRendering();
+                    const audioData = resampledBuffer.getChannelData(0); // Float32Array
+
+                    // Wait for worker response
+                    const handleMessage = (e) => {
+                        const { type, msgId: resMsgId, text, error } = e.data;
+                        if (resMsgId === msgId) {
+                            whisperWorker.removeEventListener('message', handleMessage);
+                            if (type === 'transcription_result') {
+                                resolve(text.trim());
+                            } else if (type === 'transcription_error') {
+                                resolve(`[Transcription error: ${error}]`);
+                            }
+                        }
+                    };
+
+                    whisperWorker.addEventListener('message', handleMessage);
+                    // Send to worker — pass language preference (empty string = auto-detect)
+                    whisperWorker.postMessage({ type: 'transcribe', data: audioData, msgId: msgId, language: transcribeLang || null });
+
+                } catch (e) {
+                    resolve(`[Transcription error: ${e.message}]`);
+                }
+            });
+        }
+
+        async function copySelected() {
             if (selectedIds.size === 0) return;
+            const btn = document.getElementById('copy-btn');
+            const originalBtnText = btn.innerText;
+
             const sortedIds = Array.from(selectedIds).sort((a, b) => a - b);
             
-            let copyText = "";
-            sortedIds.forEach(id => {
+            // Fast text extraction path
+            let messagesData = [];
+            for (const id of sortedIds) {
                 const msg = messageDataStore[id];
                 if (msg) {
-                    // Strip HTML tags for clipboard
                     let rawText = msg.text_content || "";
                     if (rawText) {
                         const temp = document.createElement("div");
                         temp.innerHTML = rawText;
                         rawText = temp.innerText;
                     }
-                    
-                    const mediaLabel = msg.media_type ? `[${msg.media_type.toUpperCase()}] ` : '';
-                    copyText += `[${msg.timestamp}] ${msg.sender}: ${mediaLabel}${rawText}\n`;
+                    messagesData.push({ ...msg, rawText });
                 }
-            });
+            }
 
-            navigator.clipboard.writeText(copyText.trim()).then(() => {
-                const btn = document.getElementById('copy-btn');
+            // Check if we need to transcribe any media
+            const needsTranscription = autoTranscribe && whisperReady && messagesData.some(m => 
+                m.media_path && (m.media_type === 'voice' || m.media_type === 'round_video' || m.media_type === 'video' || m.media_type === 'audio')
+            );
+
+            if (needsTranscription) {
+                btn.innerText = "⏳ Transcribing...";
+                btn.style.pointerEvents = "none";
+            }
+
+            let copyText = "";
+            for (const msg of messagesData) {
+                const mediaLabel = msg.media_type ? `[${msg.media_type.toUpperCase()}] ` : '';
+                let finalOut = `[${msg.timestamp}] ${msg.sender}: ${mediaLabel}${msg.rawText}`;
+                
+                // Perform inference
+                if (autoTranscribe && whisperReady && msg.media_path) {
+                    const isMediaToTranscribe = msg.media_type === 'voice' || msg.media_type === 'round_video' || msg.media_type === 'video' || msg.media_type === 'audio';
+                    if (isMediaToTranscribe) {
+                        const safePath = `/media?path=${encodeURIComponent(msg.media_path)}`;
+                        const transcript = await transcribeAudioFile(safePath, msg.id);
+                        if (transcript) {
+                            finalOut += `\n>> Transcribed: ${transcript}`;
+                        }
+                    }
+                }
+                copyText += finalOut.trim() + '\n';
+            }
+
+            try {
+                // Clipboard write
+                await navigator.clipboard.writeText(copyText.trim());
                 btn.innerText = "✅ Copied!";
-                setTimeout(() => { btn.innerText = "📋 Copy"; }, 1000);
-            });
+            } catch (err) {
+                // Fallback for strict browsers if async takes too long
+                console.error("Async clipboard write failed, trying fallback...", err);
+                const textArea = document.createElement("textarea");
+                textArea.value = copyText.trim();
+                document.body.appendChild(textArea);
+                textArea.select();
+                try {
+                    document.execCommand('copy');
+                    btn.innerText = "✅ Copied! (Fallback)";
+                } catch (errFallback) {
+                    btn.innerText = "❌ Copy Failed";
+                    alert("Copy failed. Async transcription might have taken too long for your browser's security settings. Turn off auto-transcribe to copy immediately.");
+                }
+                document.body.removeChild(textArea);
+            }
+
+            btn.style.pointerEvents = "auto";
+            setTimeout(() => { btn.innerText = "📋 Copy"; }, 2000);
         }
 

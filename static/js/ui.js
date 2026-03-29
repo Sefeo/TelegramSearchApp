@@ -72,6 +72,67 @@
             else { alert("No messages found on or after this date."); }
         }
 
+        // --- WHISPER INITIALIZATION ---
+        const transcribeSetting = document.getElementById('setting-auto-transcribe');
+        transcribeSetting.checked = autoTranscribe;
+        
+        // Listen for checkbox changes
+        transcribeSetting.addEventListener('change', (e) => {
+            if (e.target.checked && !whisperReady) {
+                alert("Please initialize the Whisper model first.");
+                e.target.checked = false;
+                return;
+            }
+            autoTranscribe = e.target.checked;
+            localStorage.setItem('autoTranscribe', autoTranscribe);
+        });
+
+        function initializeWhisper() {
+            const btn = document.getElementById('btn-init-whisper');
+            if (whisperReady) {
+                alert("Whisper model is already initialized and ready.");
+                return;
+            }
+
+            if (!whisperWorker) {
+                whisperWorker = new Worker('/static/js/transcribe_worker.js', { type: 'module' });
+                
+                whisperWorker.addEventListener('message', (e) => {
+                    const { type, status, data, error } = e.data;
+                    
+                    if (type === 'status') {
+                        if (status === 'loading') {
+                            btn.innerText = "Loading Model (0%)...";
+                            btn.style.background = "#888";
+                            btn.disabled = true;
+                        } else if (status === 'ready') {
+                            whisperReady = true;
+                            const device = e.data.device || 'wasm';
+                            const deviceLabel = device === 'webgpu' ? '⚡ GPU' : '🖥️ CPU';
+                            btn.innerText = `✅ Whisper Ready (${deviceLabel})`;
+                            btn.style.background = device === 'webgpu' ? '#7bc862' : '#c8a830';
+                            transcribeSetting.checked = true;
+                            autoTranscribe = true;
+                            localStorage.setItem('autoTranscribe', 'true');
+                        }
+                    } else if (type === 'progress') {
+                        // data is the HuggingFace progress object
+                        if (data && data.progress !== undefined) {
+                            btn.innerText = `Loading Model (${Math.round(data.progress)}%)...`;
+                        }
+                    } else if (type === 'error') {
+                        console.error("Whisper Error:", error);
+                        btn.innerText = "❌ Initialization Failed";
+                        btn.style.background = "#e17076";
+                        btn.disabled = false;
+                        alert("Failed to initialize Whisper. Please check the console or ensure your browser supports WebGPU/WASM.");
+                    }
+                });
+            }
+
+            whisperWorker.postMessage({ type: 'init' });
+        }
+
         async function loadSenders() {
             try {
                 const res = await fetch('/api/senders');

@@ -8,6 +8,22 @@ const chat = document.getElementById('chat');
         waveSetting.checked = localStorage.getItem('autoWaveforms') === 'true';
         waveSetting.addEventListener('change', (e) => localStorage.setItem('autoWaveforms', e.target.checked));
 
+        // --- WHISPER AUTO-TRANSCRIBE ---
+        let whisperWorker = null;
+        let whisperReady = false;
+        let autoTranscribe = localStorage.getItem('autoTranscribe') === 'true';
+        let transcribeLang = localStorage.getItem('transcribeLang') || '';
+
+        // Restore language dropdown on load
+        const transcribeLangEl = document.getElementById('setting-transcribe-lang');
+        if (transcribeLangEl) {
+            transcribeLangEl.value = transcribeLang;
+            transcribeLangEl.addEventListener('change', (e) => {
+                transcribeLang = e.target.value;
+                localStorage.setItem('transcribeLang', transcribeLang);
+            });
+        }
+
         // --- MEDIA PLAYER LOGIC ---
         const engine = document.getElementById('media-engine');
         const playerBar = document.getElementById('global-player');

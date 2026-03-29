@@ -46,8 +46,41 @@
 
     <!-- Settings Modal -->
     <div id="settings-modal" style="display:none; position:fixed; top:50%; left:50%; transform:translate(-50%, -50%); background:#17212b; padding:20px; border-radius:8px; z-index:1000; box-shadow:0 0 20px rgba(0,0,0,0.8); width: 320px; border: 1px solid #000;">
-        <h3 style="margin-top:0; color: white;">Settings</h3>
+        <h3 style="margin-top:0; color: white; border-bottom: 1px solid #3a4b5c; padding-bottom: 10px; margin-bottom: 15px;">Settings</h3>
         
+        <!-- AI Transcription Section -->
+        <div id="ai-transcription-section" style="margin-bottom: 25px; background: rgba(82, 136, 193, 0.1); padding: 12px; border-radius: 8px; border: 1px solid rgba(82, 136, 193, 0.3);">
+            <h4 style="margin: 0 0 10px 0; color: white; display: flex; align-items: center; gap: 8px; font-size: 15px;">
+                🚀 AI Transcription
+                <div class="tooltip" style="font-size: 12px; font-weight: normal;">ⓘ
+                    <span class="tooltip-text" style="width: 250px;">Uses WebGPU and the local Whisper Large V3 Turbo model for high-accuracy transcription. ~400MB one-time download, cached in your browser. Runs entirely offline.</span>
+                </div>
+            </h4>
+            <div style="margin-bottom: 10px; font-size: 14px; display: flex; align-items: center; color: #eee;">
+                <input type="checkbox" id="setting-auto-transcribe" style="width: auto; margin-right: 10px; cursor: pointer;">
+                <label for="setting-auto-transcribe" style="cursor: pointer;">Auto-transcribe on copy</label>
+            </div>
+            <div style="margin-bottom: 12px; font-size: 13px; color: #abb8c4;">
+                <label for="setting-transcribe-lang" style="display: block; margin-bottom: 5px;">Transcription Language:</label>
+                <select id="setting-transcribe-lang" style="width: 100%; background: #0e1621; color: white; border: 1px solid #3a4b5c; border-radius: 6px; padding: 7px 10px; font-size: 13px; cursor: pointer; outline: none;">
+                    <option value="">🌐 Auto-detect (unreliable)</option>
+                    <option value="ukrainian">🇺🇦 Ukrainian</option>
+                    <option value="russian">🇷🇺 Russian</option>
+                    <option value="english">🇬🇧 English</option>
+                    <option value="german">🇩🇪 German</option>
+                    <option value="french">🇫🇷 French</option>
+                    <option value="spanish">🇪🇸 Spanish</option>
+                    <option value="polish">🇵🇱 Polish</option>
+                    <option value="turkish">🇹🇷 Turkish</option>
+                    <option value="arabic">🇸🇦 Arabic</option>
+                    <option value="chinese">🇨🇳 Chinese</option>
+                    <option value="japanese">🇯🇵 Japanese</option>
+                </select>
+            </div>
+            <button class="search-btn" id="btn-init-whisper" onclick="initializeWhisper()" style="font-size: 13px; background: #5288c1; box-shadow: 0 2px 5px rgba(0,0,0,0.3);">Initialize Whisper Model</button>
+        </div>
+
+
         <div style="margin-bottom: 20px; font-size: 14px; display: flex; align-items: center;">
             <input type="checkbox" id="setting-auto-wave" style="width: auto; margin-right: 10px; cursor: pointer;">
             <label for="setting-auto-wave" style="cursor: pointer;">Process real waveforms on play</label>
@@ -57,7 +90,8 @@
         </div>
 
         <button class="search-btn" id="btn-gen-all" onclick="generateAllWaveforms()" style="margin-bottom: 10px; font-size: 13px;">Generate missing waveforms for ALL messages</button>
-		<button class="search-btn" onclick="if(confirm('This will re-analyze ALL 9000+ files. It will take time. Continue?')) generateAllWaveforms(true)" style="margin-bottom: 10px; font-size: 13px; background: #8f4a4e;">Force Regenerate ALL Waveforms</button>
+		<button class="search-btn" onclick="if(confirm('This will re-analyze ALL 9000+ files. It will take time. Continue?')) generateAllWaveforms(true)" style="margin-bottom: 20px; font-size: 13px; background: #8f4a4e;">Force Regenerate ALL Waveforms</button>
+
         <button class="search-btn" onclick="document.getElementById('settings-modal').style.display='none'" style="background:#2f3b4a;">Close</button>
     </div>
 	

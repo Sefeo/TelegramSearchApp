@@ -17,3 +17,8 @@
         } else {
             loadInitial();
         }
+
+        // Auto-initialize Whisper if enabled
+        if (typeof autoTranscribe !== 'undefined' && autoTranscribe && typeof initializeWhisper === 'function') {
+            initializeWhisper();
+        }
