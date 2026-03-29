@@ -3,7 +3,7 @@ import sqlite3
 import re
 import argparse
 from datetime import datetime
-from bs4 import BeautifulSoup
+from bs4 import BeautifulSoup, SoupStrainer
 import json
 import sys
 
@@ -77,19 +77,35 @@ def parse_folder(conn, folder_path, folder_name):
     last_timestamp = "1970-01-01 00:00:00"
     current_sender = "Unknown" 
 
+    # Pre-compile regexes for performance optimization
+    MSG_CLASS_RE = re.compile(r'message')
+    DATE_RE = re.compile(r'\d{2}\.\d{2}\.\d{4} \d{2}:\d{2}:\d{2}')
+    GO_TO_MESSAGE_RE = re.compile(r'go_to_message')
+    MESSAGE_ID_RE = re.compile(r'message\d+')
+    POLL_VOTE_RE = re.compile(r'(\d+)')
+    MAPS_COORD_RE = re.compile(r'q=([\d\.,-]+)')
+    SYS_DATE_PILL_RE = re.compile(r'^\d{1,2} [A-Z][a-z]+ \d{4}$')
+
     for file in files:
         file_path = os.path.join(folder_path, file)
         print(f"  Reading {file} using {parser}...")
+        
+        # We will batch inserts per-file
+        normal_msgs_batch = []
+        sys_msgs_batch = []
+        
         with open(file_path, 'r', encoding='utf-8', errors='ignore') as f:
-            soup = BeautifulSoup(f.read(), parser)
+            # SoupStrainer optimizes initial parse by ignoring irrelevant nodes
+            strainer = SoupStrainer('div', class_=MSG_CLASS_RE)
+            soup = BeautifulSoup(f.read(), parser, parse_only=strainer)
             
-            for msg in soup.find_all('div', class_=re.compile(r'message')):
+            for msg in soup.find_all('div', class_=MSG_CLASS_RE):
                 classes = msg.get('class', [])
                 
                 # --- 1. Date Extraction ---
                 date_div = msg.find(lambda tag: tag.name == 'div' and tag.has_attr('title') and '20' in tag['title'])
                 if date_div:
-                    match = re.search(r'\d{2}\.\d{2}\.\d{4} \d{2}:\d{2}:\d{2}', date_div['title'].strip())
+                    match = DATE_RE.search(date_div['title'].strip())
                     if match:
                         try: 
                             last_timestamp = datetime.strptime(match.group(0), "%d.%m.%Y %H:%M:%S").strftime("%Y-%m-%d %H:%M:%S")
@@ -108,9 +124,9 @@ def parse_folder(conn, folder_path, folder_name):
                     reply_to_tg_id = None
                     reply_div = msg.find('div', class_='reply_to')
                     if reply_div:
-                        a_tag = reply_div.find('a', href=re.compile(r'go_to_message'))
+                        a_tag = reply_div.find('a', href=GO_TO_MESSAGE_RE)
                         if a_tag:
-                            match = re.search(r'message\d+', a_tag['href'])
+                            match = MESSAGE_ID_RE.search(a_tag['href'])
                             if match: reply_to_tg_id = match.group(0)
 
                     # Rich Text
@@ -137,33 +153,28 @@ def parse_folder(conn, folder_path, folder_name):
                         
                         options = []
                         for ans in poll.find_all('div', class_='answer'):
-                            # Separate text from the details span
                             details_span = ans.find('span', class_='details')
                             vote_info = details_span.text.strip() if details_span else "0"
                             
-                            # Remove the span to get just the answer text
                             if details_span: details_span.extract()
-                            ans_text = ans.text.strip().replace('-', '', 1).strip() # Remove leading dash
+                            ans_text = ans.text.strip().replace('-', '', 1).strip()
                             
                             is_chosen = "chosen" in vote_info
-                            match = re.search(r'(\d+)', vote_info)
+                            match = POLL_VOTE_RE.search(vote_info)
                             count = int(match.group(1)) if match else 0
                             
                             options.append({"text": ans_text, "count": count, "chosen": is_chosen})
                         
                         media_type = 'poll'
-                        # Store complex poll data as JSON string in text_content
                         text_content = json.dumps({"question": question, "type": poll_type, "total": total_count, "options": options})
 
                     elif location:
                         href = location['href']
-                        # Try to extract coords from Google Maps link
                         coords = "Unknown Location"
-                        match = re.search(r'q=([\d\.,-]+)', href)
+                        match = MAPS_COORD_RE.search(href)
                         if match: coords = match.group(1)
                         
                         media_type = 'location'
-                        # Store Coords|Link
                         text_content = f"{coords}|{href}"
                     
                     elif contact:
@@ -181,7 +192,6 @@ def parse_folder(conn, folder_path, folder_name):
                         media_path = os.path.abspath(os.path.join(folder_path, sticker['src']))
                         media_type = 'sticker'
                     else:
-                        # Check for GIFs/Videos via links
                         media_links = msg.find_all('a', href=True)
                         for link in media_links:
                             href = link['href']
@@ -194,7 +204,6 @@ def parse_folder(conn, folder_path, folder_name):
                             elif href.startswith('round_video_messages/'): media_type = 'round_video'
                             elif href.startswith('files/'): media_type = 'file'
                             elif href.startswith('video_files/') or is_video_block:
-                                # Distinguish GIF vs Video
                                 if title_text == "Animation" or href.startswith('animated_stickers/') or href.startswith('animations/'):
                                     media_type = 'gif'
                                 else:
@@ -204,12 +213,8 @@ def parse_folder(conn, folder_path, folder_name):
                                 media_path = os.path.abspath(os.path.join(folder_path, href))
                                 break 
 
-                    c.execute("""INSERT INTO messages 
-                                 (source_folder, file_name, sender, timestamp, text_content, 
-                                  media_path, media_type, tg_id, reply_to_tg_id) 
-                                 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)""",
-                               (folder_name, file, current_sender, msg_date, text_content, 
-                                media_path, media_type, tg_id, reply_to_tg_id))
+                    normal_msgs_batch.append((folder_name, file, current_sender, msg_date, text_content, 
+                                              media_path, media_type, tg_id, reply_to_tg_id))
                     total += 1
 
                 # --- 3. System Messages ---
@@ -218,25 +223,31 @@ def parse_folder(conn, folder_path, folder_name):
                     if body:
                         text = body.text.strip()
                         
-                        # Group photos change
                         userpic = msg.find('img', class_='userpic')
                         if userpic and userpic.has_attr('src'):
                             media_path = os.path.abspath(os.path.join(folder_path, userpic['src']))
                             media_type = 'service_photo'
-                        # Ignore date pills
-                        if not re.match(r'^\d{1,2} [A-Z][a-z]+ \d{4}$', text):
-                            # Record Pinned IDs
+                        
+                        if not SYS_DATE_PILL_RE.match(text):
                             if "pinned" in text:
-                                a_tag = body.find('a', href=re.compile(r'go_to_message'))
+                                a_tag = body.find('a', href=GO_TO_MESSAGE_RE)
                                 if a_tag:
-                                    match = re.search(r'message\d+', a_tag['href'])
+                                    match = MESSAGE_ID_RE.search(a_tag['href'])
                                     if match: pinned_tg_ids.add(match.group(0))
 
-                            c.execute("""INSERT INTO messages 
-                                         (source_folder, file_name, sender, timestamp, text_content, media_type) 
-                                         VALUES (?, ?, ?, ?, ?, ?)""",
-                                      (folder_name, file, "System", msg_date, text, 'service'))
+                            sys_msgs_batch.append((folder_name, file, "System", msg_date, text, 'service'))
                             total += 1
+
+        # Execute batched inserts
+        if normal_msgs_batch:
+            c.executemany("""INSERT INTO messages 
+                             (source_folder, file_name, sender, timestamp, text_content, 
+                              media_path, media_type, tg_id, reply_to_tg_id) 
+                             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)""", normal_msgs_batch)
+        if sys_msgs_batch:
+            c.executemany("""INSERT INTO messages 
+                             (source_folder, file_name, sender, timestamp, text_content, media_type) 
+                             VALUES (?, ?, ?, ?, ?, ?)""", sys_msgs_batch)
 
         # Link replies for this specific file
         c.execute('''UPDATE messages 
