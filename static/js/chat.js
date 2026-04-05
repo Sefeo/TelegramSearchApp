@@ -50,11 +50,38 @@
             if (highlightKeyword) {
                 const textArea = target.querySelector('.text');
                 if (textArea) {
-                    const originalText = textArea.innerHTML;
+                    const originalHTML = textArea.innerHTML;
                     const safeKeyword = escapeRegExp(highlightKeyword);
                     const regex = new RegExp(`(${safeKeyword})`, 'gi');
-                    textArea.innerHTML = originalText.replace(regex, '<span class="highlight-match">$1</span>');
-                    setTimeout(() => { if(textArea) textArea.innerHTML = originalText; }, 3000);
+                    
+                    // Safe highlighting that only touches text nodes
+                    const walkAndHighlight = (node) => {
+                        if (node.nodeType === 3) { // Text Node
+                            const val = node.nodeValue;
+                            if (regex.test(val)) {
+                                regex.lastIndex = 0; // Reset for use in loop
+                                const fragment = document.createDocumentFragment();
+                                let lastIdx = 0;
+                                let match;
+                                while ((match = regex.exec(val)) !== null) {
+                                    fragment.appendChild(document.createTextNode(val.substring(lastIdx, match.index)));
+                                    const highlight = document.createElement('span');
+                                    highlight.className = 'highlight-match';
+                                    highlight.textContent = match[0];
+                                    fragment.appendChild(highlight);
+                                    lastIdx = regex.lastIndex;
+                                }
+                                fragment.appendChild(document.createTextNode(val.substring(lastIdx)));
+                                node.parentNode.replaceChild(fragment, node);
+                            }
+                        } else if (node.nodeType === 1 && node.childNodes && node.className !== 'highlight-match') {
+                            // Don't recurse into our own highlights or non-element nodes
+                            Array.from(node.childNodes).forEach(walkAndHighlight);
+                        }
+                    };
+                    
+                    walkAndHighlight(textArea);
+                    setTimeout(() => { if(textArea) textArea.innerHTML = originalHTML; }, 3000);
                 }
             }
         }

@@ -309,6 +309,10 @@
                     else if (msg.media_type === 'voice') text = "Voice Message";
                     else if (msg.media_type) text = `${msg.media_type.charAt(0).toUpperCase() + msg.media_type.slice(1)}`;
                     else text = "Message";
+                } else {
+                    // Strip HTML tags to prevent broken layout during snippet generation
+                    const doc = new DOMParser().parseFromString(text, 'text/html');
+                    text = doc.body.textContent || "";
                 }
 				
 				//Smart snippet generation
