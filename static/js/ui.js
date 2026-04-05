@@ -310,8 +310,9 @@
                     else if (msg.media_type) text = `${msg.media_type.charAt(0).toUpperCase() + msg.media_type.slice(1)}`;
                     else text = "Message";
                 } else {
-                    // Strip HTML tags to prevent broken layout during snippet generation
-                    const doc = new DOMParser().parseFromString(text, 'text/html');
+                    // Replace line breaks with spaces before stripping tags
+                    let processedText = text.replace(/<br\s*\/?>/gi, ' ').replace(/\n/g, ' ');
+                    const doc = new DOMParser().parseFromString(processedText, 'text/html');
                     text = doc.body.textContent || "";
                 }
 				
