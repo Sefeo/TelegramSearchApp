@@ -35,6 +35,13 @@
         });
 
         // --- CALENDAR & SEARCH LOGIC ---
+        // Dynamically reposition calendar when layout shifts
+        document.body.addEventListener('transitionend', (e) => {
+            if (e.target.classList && e.target.classList.contains('btn-round') && window.DatePicker) {
+                DatePicker.reposition();
+            }
+        });
+
         function toggleSearch() { 
             const sidebar = document.getElementById('sidebar');
             if (sidebar.classList.contains('open')) {
@@ -43,6 +50,9 @@
                 document.getElementById('searchResults').innerHTML = '';
                 document.getElementById('start_date').value = '';
                 document.getElementById('end_date').value = '';
+                document.getElementById('disp-start-date').textContent = 'Not set';
+                document.getElementById('disp-end-date').textContent = 'Not set';
+                _dpDates.start = null; _dpDates.end = null;
                 document.querySelectorAll('.sender-checkbox').forEach(cb => cb.checked = false);
             }
             sidebar.classList.toggle('open'); 
@@ -63,14 +73,42 @@
             }
         }
 
-        async function executeDateJump() {
-            const dateVal = document.getElementById('jump-date-input').value;
-            if(!dateVal) return;
-            document.getElementById('date-modal').style.display = 'none';
-            const res = await fetch(`/api/jump_date?date=${dateVal}`);
-            if(res.ok) { const data = await res.json(); jumpToContext(data.id); } 
-            else { alert("No messages found on or after this date."); }
+        // Stored dates so the picker re-opens on the same selection
+        const _dpDates = { jump: null, start: null, end: null };
+
+        function openJumpDatePicker(anchorEl) {
+            DatePicker.open({
+                anchorEl,
+                value: _dpDates.jump,   // null → auto-detect scroll date
+                confirmLabel: 'Перейти',
+                onConfirm: async (date) => {
+                    _dpDates.jump = date;
+                    const res = await fetch(`/api/jump_date?date=${date}`);
+                    if (res.ok) { const d = await res.json(); jumpToContext(d.id); }
+                    else alert('No messages found on or after this date.');
+                }
+            });
         }
+
+        function openSearchDatePicker(anchorEl, which) {
+            const key = which === 'start' ? 'start' : 'end';
+            DatePicker.open({
+                anchorEl,
+                value: _dpDates[key],
+                showClear: true,
+                confirmLabel: 'Обрати',
+                onConfirm: (date) => {
+                    _dpDates[key] = date;
+                    document.getElementById(which === 'start' ? 'start_date' : 'end_date').value = date || '';
+                    document.getElementById(which === 'start' ? 'disp-start-date' : 'disp-end-date').textContent = date || 'Not set';
+                }
+            });
+        }
+
+        async function executeDateJump() {
+            // Kept for backward-compat; the custom picker calls jumpToContext directly
+        }
+
 
         // --- WHISPER INITIALIZATION ---
         const transcribeSetting = document.getElementById('setting-auto-transcribe');

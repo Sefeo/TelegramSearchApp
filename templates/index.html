@@ -124,19 +124,14 @@
     
     <!-- Floating Buttons -->
     <div class="btn-round" id="btn-search" onclick="toggleSearch()" title="Search">🔍</div>
-    <div class="btn-round" id="btn-calendar" onclick="toggleModal('date-modal')" title="Jump to Date">📅</div>
+    <div class="btn-round" id="btn-calendar" onclick="openJumpDatePicker(this)" title="Jump to Date">📅</div>
     <div class="btn-round" id="btn-media" onclick="toggleMediaMenu()" title="Shared Media">🖼️</div>
     <div class="btn-round" id="btn-settings" onclick="toggleModal('settings-modal')" title="Settings">⚙️</div>
     <div class="btn-round" id="btn-pulse" onclick="togglePulseDashboard()" title="Chat Pulse Dashboard">📊</div>
     <div class="btn-round" id="btn-down" onclick="jumpToBottom()" title="Go to latest">⬇</div>
 
-    <!-- Date Jump Modal -->
-    <div id="date-modal">
-        <h3 style="margin-top:0; color: white;">Jump to Date</h3>
-        <input type="date" id="jump-date-input" style="width:100%; margin-bottom:15px; color-scheme: dark;">
-        <button class="search-btn" onclick="executeDateJump()">Go</button>
-        <button class="search-btn" onclick="document.getElementById('date-modal').style.display='none'" style="background:#2f3b4a; margin-top:10px;">Cancel</button>
-    </div>
+    <!-- Date Jump Modal (hidden, kept for toggleModal compatibility) -->
+    <div id="date-modal" style="display:none;"></div>
 
     <!-- Search Sidebar -->
     <div class="sidebar" id="sidebar">
@@ -149,9 +144,11 @@
             <div id="sender-list-container" class="sender-list">Loading users...</div>
 
             <label style="font-size: 12px; color: var(--text-muted);">Start Date</label>
-            <input type="date" id="start_date" style="color-scheme: dark;">
+            <button class="dp-trigger" id="btn-start-date" onclick="openSearchDatePicker(this,'start')"><span id="disp-start-date">Not set</span> 📅</button>
+            <input type="hidden" id="start_date">
             <label style="font-size: 12px; color: var(--text-muted);"><br>End Date</label>
-            <input type="date" id="end_date" style="color-scheme: dark;">
+            <button class="dp-trigger" id="btn-end-date" onclick="openSearchDatePicker(this,'end')"><span id="disp-end-date">Not set</span> 📅</button>
+            <input type="hidden" id="end_date">
             <button class="search-btn" onclick="executeSearch()">Find Messages</button>
             <div id="searchResults" style="margin-top: 15px;"></div>
         </div>
@@ -162,6 +159,7 @@
 
     <script src="/static/js/globals.js"></script>
     <script src="/static/js/utils.js"></script>
+    <script src="/static/js/datepicker.js"></script>
     <script src="/static/js/player.js"></script>
     <script src="/static/js/selection.js"></script>
     <script src="/static/js/render.js"></script>

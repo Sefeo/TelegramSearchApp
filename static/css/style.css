@@ -338,9 +338,104 @@
             0% { background-color: rgba(255, 255, 0, 0.5); box-shadow: 0 0 10px rgba(255, 255, 0, 0.3); color: white; }
             100% { background-color: transparent; box-shadow: none; color: inherit; }
         }
+        
         .highlight-match {
             animation: text-highlight-anim 2.5s ease-out forwards;
             border-radius: 4px;
             padding: 0 2px;
             font-weight: bold;
         }
+
+        /* ──────────────────────────────────────────
+           Custom Date Picker
+        ────────────────────────────────────────── */
+        .dp-trigger {
+            width: 100%; display: flex; justify-content: space-between; align-items: center;
+            background: rgba(255,255,255,0.06); border: 1px solid rgba(255,255,255,0.12);
+            color: var(--text-main); border-radius: 8px; padding: 8px 12px;
+            font-size: 13px; cursor: pointer; margin-bottom: 4px;
+            transition: background 0.2s;
+        }
+        .dp-trigger:hover { background: rgba(255,255,255,0.1); }
+
+        /* Popup shell */
+        .dp-popup {
+            background: #1a2736; border: 1px solid rgba(255,255,255,0.1);
+            border-radius: 14px; box-shadow: 0 12px 40px rgba(0,0,0,0.6);
+            padding: 14px; user-select: none;
+        }
+
+        /* Header */
+        .dp-header { display: flex; align-items: center; justify-content: space-between; margin-bottom: 10px; }
+        .dp-nav {
+            background: none; border: none; color: var(--text-muted); font-size: 20px;
+            cursor: pointer; width: 32px; height: 32px; border-radius: 50%;
+            display: flex; align-items: center; justify-content: center; transition: background 0.15s;
+        }
+        .dp-nav:hover:not(.dp-nav-dis) { background: rgba(255,255,255,0.08); color: white; }
+        .dp-nav-dis { opacity: 0.25; cursor: default; }
+        .dp-title {
+            flex: 1; background: none; border: none; color: white; font-size: 14px;
+            font-weight: 600; cursor: pointer; border-radius: 8px; padding: 4px 8px;
+            transition: background 0.15s; display: flex; align-items: center; gap: 5px;
+        }
+        .dp-title:hover { background: rgba(255,255,255,0.08); }
+        .dp-title-tri { color: var(--accent); font-size: 10px; }
+
+        /* Weekday row */
+        .dp-wdays { display: grid; grid-template-columns: repeat(7,1fr); margin-bottom: 4px; }
+        .dp-wday { text-align: center; font-size: 11px; color: var(--accent); font-weight: 600; padding: 2px 0; }
+
+        /* Day grid */
+        .dp-grid { display: grid; grid-template-columns: repeat(7,1fr); gap: 2px; }
+        .dp-cell {
+            aspect-ratio: 1; display: flex; align-items: center; justify-content: center;
+            border-radius: 50%; font-size: 13px; position: relative;
+        }
+        .dp-other { color: rgba(255,255,255,0.2); }
+        .dp-dis   { color: rgba(255,255,255,0.22); cursor: not-allowed; }
+        .dp-act   { color: white; cursor: pointer; transition: background 0.15s; }
+        .dp-act:hover { background: rgba(82,136,193,0.3); }
+        .dp-today::after {
+            content: ''; position: absolute; bottom: 3px; left: 50%; transform: translateX(-50%);
+            width: 4px; height: 4px; border-radius: 50%; background: var(--accent);
+        }
+        .dp-sel {
+            background: var(--accent) !important;
+            color: white !important; font-weight: 700;
+        }
+
+        /* Footer */
+        .dp-footer { display: flex; justify-content: flex-end; gap: 10px; margin-top: 10px; padding-top: 8px; border-top: 1px solid rgba(255,255,255,0.07); }
+        .dp-fbtn { background: none; border: none; font-size: 14px; font-weight: 600; padding: 4px 8px; border-radius: 6px; cursor: pointer; transition: background 0.15s; }
+        .dp-fcancel { color: var(--text-muted); }
+        .dp-fcancel:hover { background: rgba(255,255,255,0.06); }
+        .dp-fconfirm { color: var(--accent); }
+        .dp-fconfirm:hover { background: rgba(82,136,193,0.15); }
+
+        /* Month/Year picker */
+        .dp-my-wrap { display: flex; flex-direction: column; }
+        .dp-my-cols { display: flex; height: 220px; gap: 0; overflow: hidden; }
+        .dp-my-col  { flex: 1; overflow-y: auto; scrollbar-width: none; }
+        .dp-my-col::-webkit-scrollbar { display: none; }
+        .dp-my-sep  { width: 1px; background: rgba(255,255,255,0.08); margin: 8px 0; }
+        .dp-my-scroll { display: flex; flex-direction: column; padding: 80px 0; }
+        .dp-prow {
+            padding: 10px 14px; font-size: 14px; color: rgba(255,255,255,0.4);
+            cursor: pointer; text-align: center; transition: color 0.15s;
+            white-space: nowrap;
+        }
+        .dp-prow:hover:not(.dp-pdis) { color: rgba(255,255,255,0.8); }
+        .dp-psel {
+            color: var(--accent) !important; font-weight: 700; font-size: 16px;
+            box-shadow: 0 -1px 0 rgba(82,136,193,0.4), 0 1px 0 rgba(82,136,193,0.4);
+        }
+        .dp-pdis { color: rgba(255,255,255,0.15) !important; cursor: not-allowed; }
+
+        /* Tooltip */
+        .dp-tip {
+            background: rgba(0,0,0,0.85); color: white; font-size: 12px;
+            padding: 4px 10px; border-radius: 8px; pointer-events: none;
+            white-space: nowrap; z-index: 10000; position: fixed;
+            box-shadow: 0 2px 8px rgba(0,0,0,0.4);
+        }

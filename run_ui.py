@@ -13,6 +13,7 @@ import json
 import traceback
 import argparse
 from datetime import datetime
+import calendar as cal_module
 from threading import Timer
 from typing import Any, Optional, Union, Dict, List, Set, Tuple, cast
 
@@ -168,7 +169,45 @@ def jump_date():
         return jsonify({"error": "No messages found"}), 404
     except Exception as e:
         return jsonify({"error": str(e)}), 500
+
+# Global cache for min/max dates to avoid re-querying
+_calendar_bounds_cache = None
+
+@app.route('/api/calendar_data', methods=['GET'])
+def calendar_data():
+    global _calendar_bounds_cache
+    year = request.args.get('year', type=int)
+    month = request.args.get('month', type=int)
+    if not year or not month:
+        return jsonify({"error": "year and month required"}), 400
+    try:
+        conn = sqlite3.connect(DB_NAME)
+        c = conn.cursor()
         
+        # Super-fast O(1) indexed lookup instead of a strftime() table scan
+        if not _calendar_bounds_cache:
+            c.execute("SELECT MIN(timestamp), MAX(timestamp) FROM messages WHERE timestamp > '1990-01-01'")
+            min_ts, max_ts = c.fetchone()
+            _calendar_bounds_cache = (min_ts, max_ts)
+        else:
+            min_ts, max_ts = _calendar_bounds_cache
+            
+        last_day = cal_module.monthrange(year, month)[1]
+        start = f"{year}-{month:02d}-01 00:00:00"
+        end   = f"{year}-{month:02d}-{last_day:02d} 23:59:59"
+        
+        # Group by day using substr which is much faster than strftime
+        c.execute("SELECT CAST(substr(timestamp, 9, 2) AS INTEGER) as d, COUNT(*) FROM messages WHERE timestamp >= ? AND timestamp <= ? GROUP BY d", (start, end))
+        days = {str(row[0]): row[1] for row in c.fetchall()}
+        conn.close()
+        return jsonify({
+            "days": days,
+            "min_date": min_ts[:10] if min_ts else None,
+            "max_date": max_ts[:10] if max_ts else None
+        })
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+
 @app.route('/api/senders', methods=['GET'])
 def get_senders():
     try:
