@@ -208,6 +208,43 @@ def calendar_data():
     except Exception as e:
         return jsonify({"error": str(e)}), 500
 
+_calendar_active_months_cache = None
+
+@app.route('/api/calendar_summary', methods=['GET'])
+def calendar_summary():
+    global _calendar_active_months_cache
+    if _calendar_active_months_cache is not None:
+        return jsonify({"active_months": _calendar_active_months_cache})
+    
+    try:
+        conn = sqlite3.connect(DB_NAME)
+        c = conn.cursor()
+        
+        # O(N) -> O(log N) Recursive CTE Index Skip Scan
+        cte_query = """
+        WITH RECURSIVE
+          m(prefix) AS (
+            SELECT substr(MIN(timestamp), 1, 7) FROM messages WHERE timestamp > '1990-01-01'
+            UNION ALL
+            SELECT (SELECT substr(MIN(timestamp), 1, 7) 
+                    FROM messages 
+                    WHERE timestamp >= date(m.prefix || '-01', '+1 month')
+                   ) 
+            FROM m
+            WHERE m.prefix IS NOT NULL
+          )
+        SELECT prefix FROM m WHERE prefix IS NOT NULL;
+        """
+        c.execute(cte_query)
+        rows = c.fetchall()
+        active = [r[0] for r in rows if r[0]]
+        conn.close()
+        
+        _calendar_active_months_cache = active
+        return jsonify({"active_months": active})
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+
 @app.route('/api/senders', methods=['GET'])
 def get_senders():
     try:

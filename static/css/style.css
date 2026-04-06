@@ -415,22 +415,35 @@
 
         /* Month/Year picker */
         .dp-my-wrap { display: flex; flex-direction: column; }
-        .dp-my-cols { display: flex; height: 220px; gap: 0; overflow: hidden; }
-        .dp-my-col  { flex: 1; overflow-y: auto; scrollbar-width: none; }
+        .dp-my-cols { display: flex; height: 220px; gap: 0; overflow: hidden; position: relative; }
+        .dp-my-col  { flex: 1; overflow-y: auto; scrollbar-width: none; overscroll-behavior: contain; }
         .dp-my-col::-webkit-scrollbar { display: none; }
         .dp-my-sep  { width: 1px; background: rgba(255,255,255,0.08); margin: 8px 0; }
-        .dp-my-scroll { display: flex; flex-direction: column; padding: 80px 0; }
+        .dp-my-scroll { display: flex; flex-direction: column; padding: 90px 0; }
         .dp-prow {
             padding: 10px 14px; font-size: 14px; color: rgba(255,255,255,0.4);
-            cursor: pointer; text-align: center; transition: color 0.15s;
+            cursor: pointer; text-align: center; transition: color 0.15s, transform 0.2s;
             white-space: nowrap;
         }
         .dp-prow:hover:not(.dp-pdis) { color: rgba(255,255,255,0.8); }
+        .dp-pempty { color: rgba(255,255,255,0.15); } 
+        .dp-pempty:hover:not(.dp-pdis) { color: rgba(255,255,255,0.4); } 
         .dp-psel {
             color: var(--accent) !important; font-weight: 700; font-size: 16px;
-            box-shadow: 0 -1px 0 rgba(82,136,193,0.4), 0 1px 0 rgba(82,136,193,0.4);
+            transform: scale(1.1);
         }
-        .dp-pdis { color: rgba(255,255,255,0.15) !important; cursor: not-allowed; }
+        .dp-psel.dp-pempty {
+            color: rgba(82, 136, 193, 0.7) !important;
+            font-weight: 400 !important;
+            font-style: italic;
+            transform: scale(1.02) !important;
+        }
+        /* Selection visual overlay (the lines) */
+        .dp-my-lens {
+            content: ''; position: absolute; top: 90px; left: 0; right: 0; height: 40px;
+            pointer-events: none; border-top: 1px solid rgba(82,136,193,0.4); border-bottom: 1px solid rgba(82,136,193,0.4);
+        }
+        .dp-pdis { color: rgba(255,255,255,0.05) !important; cursor: not-allowed; }
 
         /* Tooltip */
         .dp-tip {

@@ -8,6 +8,7 @@ const DatePicker = (() => {
     let dispY, dispM;           // month currently shown
     let selDate = null;         // 'YYYY-MM-DD' currently selected
     let minDate = null, maxDate = null;
+    let activeMonths = null;    // array of "YYYY-MM" with messages
     const cache = new Map();
     let onConfirmCb = null, confirmLbl = 'Підтвердити';
     let anchor = null;
@@ -59,6 +60,15 @@ const DatePicker = (() => {
         } catch(e){ return {days:{}}; }
     }
 
+    async function fetchActiveMonths() {
+        if (activeMonths) return;
+        try {
+            const res = await fetch('/api/calendar_summary');
+            const data = await res.json();
+            activeMonths = data.active_months || [];
+        } catch(e) { activeMonths = []; }
+    }
+
     /* ─── Public open() ─── */
     async function open(opts){
         // 1. Toggle behavior: if already open on same anchor, close and abort
@@ -73,10 +83,13 @@ const DatePicker = (() => {
         showClear   = !!opts.showClear;
         view        = 'cal';
 
-        // Bootstrap min/max
-        if(!minDate||!maxDate){
+        // Bootstrap min/max and active months
+        if(!minDate||!maxDate || !activeMonths){
             const now = new Date();
-            await fetchMonth(now.getFullYear(), now.getMonth()+1);
+            await Promise.all([
+                fetchMonth(now.getFullYear(), now.getMonth()+1),
+                fetchActiveMonths()
+            ]);
         }
 
         // Resolve selected date
@@ -235,14 +248,28 @@ const DatePicker = (() => {
         const minY = mn?.y || 2010, maxY = mx?.y || new Date().getFullYear();
 
         function mValid(m){ return !(mn&&pendY===mn.y&&m<mn.m) && !(mx&&pendY===mx.y&&m>mx.m); }
+        function hasMsg(y, m) { return activeMonths ? activeMonths.includes(fmt(y, m).substring(0, 7)) : true; }
+        function hasYearMsg(y) { return activeMonths ? activeMonths.some(am => am.startsWith(y.toString())) : true; }
 
-        function mHTML(){ return MONTHS.map((n,i)=>{ const m=i+1,v=mValid(m),s=m===pendM;
-            return `<div class="dp-prow${s?' dp-psel':''}${!v?' dp-pdis':''}" data-month="${m}">${n}</div>`; }).join(''); }
-        function yHTML(){ let h=''; for(let y=minY;y<=maxY;y++) h+=`<div class="dp-prow${y===pendY?' dp-psel':''}" data-year="${y}">${y}</div>`; return h; }
+        function mHTML(){ 
+            return MONTHS.map((n,i)=>{ 
+                const m=i+1, v=mValid(m), s=m===pendM, empty=!hasMsg(pendY, m);
+                return `<div class="dp-prow${s?' dp-psel':''}${!v?' dp-pdis':''}${empty&&v?' dp-pempty':''}" data-month="${m}">${n}</div>`; 
+            }).join(''); 
+        }
+        function yHTML(){ 
+            let h=''; 
+            for(let y=minY;y<=maxY;y++) {
+                const s=y===pendY, empty=!hasYearMsg(y);
+                h+=`<div class="dp-prow${s?' dp-psel':''}${empty?' dp-pempty':''}" data-year="${y}">${y}</div>`; 
+            }
+            return h; 
+        }
 
         popup.innerHTML = `
           <div class="dp-my-wrap">
             <div class="dp-my-cols">
+              <div class="dp-my-lens"></div>
               <div class="dp-my-col" id="dp-mcol"><div class="dp-my-scroll" id="dp-mscroll">${mHTML()}</div></div>
               <div class="dp-my-sep"></div>
               <div class="dp-my-col" id="dp-ycol"><div class="dp-my-scroll" id="dp-yscroll">${yHTML()}</div></div>
@@ -253,26 +280,81 @@ const DatePicker = (() => {
             </div>
           </div>`;
 
+        const mCol = popup.querySelector('#dp-mcol');
+        const yCol = popup.querySelector('#dp-ycol');
+
+        // Scroll to center initially
         requestAnimationFrame(()=>{
-            popup.querySelector('.dp-psel')?.scrollIntoView({block:'center',behavior:'instant'});
-            const ySel = popup.querySelector('#dp-yscroll .dp-psel');
-            ySel?.scrollIntoView({block:'center',behavior:'instant'});
+            popup.querySelector('#dp-mscroll .dp-psel')?.scrollIntoView({block:'center',behavior:'instant'});
+            popup.querySelector('#dp-yscroll .dp-psel')?.scrollIntoView({block:'center',behavior:'instant'});
         });
 
-        popup.querySelector('#dp-mcol')?.addEventListener('click', e=>{
-            const r = e.target.closest('[data-month]'); if(!r) return;
-            const m = +r.getAttribute('data-month'); if(!mValid(m)) return;
-            pendM = m;
-            popup.querySelector('#dp-mscroll').innerHTML = mHTML();
+        // Strictly handle mouse wheel events to step item-by-item smoothly
+        let wheelScrollTimer = null;
+        function handleWheel(e, colSelector, isYear) {
+            e.preventDefault();
+            const col = popup.querySelector(colSelector);
+            const items = Array.from(col.querySelectorAll('.dp-prow:not(.dp-pdis)'));
+            const current = col.querySelector('.dp-psel') || items[0];
+            let idx = items.indexOf(current);
+            if(idx !== -1) {
+                // Determine direction based on scroll delta
+                const dir = e.deltaY > 0 ? 1 : -1;
+                const newIdx = Math.max(0, Math.min(items.length - 1, idx + dir));
+                const target = items[newIdx];
+                
+                // Immediately update selection visually and initiate scroll animation
+                col.querySelectorAll('.dp-psel').forEach(el => el.classList.remove('dp-psel'));
+                target.classList.add('dp-psel');
+                target.scrollIntoView({block: 'center', behavior: 'smooth'});
+                
+                // Update internal state
+                if(isYear) {
+                    pendY = +target.getAttribute('data-year');
+                    if(mn&&pendY===mn.y&&pendM<mn.m) pendM=mn.m;
+                    if(mx&&pendY===mx.y&&pendM>mx.m) pendM=mx.m;
+                } else {
+                    pendM = +target.getAttribute('data-month');
+                }
+                
+                // Debounce only the heavy DOM re-rendering to keep the UI thread fully dedicated to the scroll animation
+                if(isYear) {
+                    clearTimeout(wheelScrollTimer);
+                    wheelScrollTimer = setTimeout(() => {
+                        popup.querySelector('#dp-mscroll').innerHTML = mHTML();
+                        requestAnimationFrame(() => popup.querySelector('#dp-mscroll .dp-psel')?.scrollIntoView({block:'center',behavior:'instant'}));
+                    }, 150);
+                }
+            }
+        }
+
+        mCol?.addEventListener('wheel', e => handleWheel(e, '#dp-mcol', false), {passive: false});
+        yCol?.addEventListener('wheel', e => handleWheel(e, '#dp-ycol', true), {passive: false});
+
+        // Smooth scroll if clicked
+        mCol?.addEventListener('click', e => {
+            const r = e.target.closest('.dp-prow:not(.dp-pdis)');
+            if(r) {
+                mCol.querySelectorAll('.dp-psel').forEach(el => el.classList.remove('dp-psel'));
+                r.classList.add('dp-psel');
+                pendM = +r.getAttribute('data-month');
+                r.scrollIntoView({block:'center', behavior:'smooth'});
+            }
         });
-        popup.querySelector('#dp-ycol')?.addEventListener('click', e=>{
-            const r = e.target.closest('[data-year]'); if(!r) return;
-            pendY = +r.getAttribute('data-year');
-            if(mn&&pendY===mn.y&&pendM<mn.m) pendM=mn.m;
-            if(mx&&pendY===mx.y&&pendM>mx.m) pendM=mx.m;
-            popup.querySelector('#dp-yscroll').innerHTML = yHTML();
-            popup.querySelector('#dp-mscroll').innerHTML = mHTML();
+        yCol?.addEventListener('click', e => {
+            const r = e.target.closest('.dp-prow:not(.dp-pdis)');
+            if(r) {
+                yCol.querySelectorAll('.dp-psel').forEach(el => el.classList.remove('dp-psel'));
+                r.classList.add('dp-psel');
+                pendY = +r.getAttribute('data-year');
+                if(mn&&pendY===mn.y&&pendM<mn.m) pendM=mn.m;
+                if(mx&&pendY===mx.y&&pendM>mx.m) pendM=mx.m;
+                popup.querySelector('#dp-mscroll').innerHTML = mHTML();
+                requestAnimationFrame(() => popup.querySelector('#dp-mscroll .dp-psel')?.scrollIntoView({block:'center',behavior:'instant'}));
+                r.scrollIntoView({block:'center', behavior:'smooth'});
+            }
         });
+
         popup.querySelector('#dp-my-cancel')?.addEventListener('click', async()=>{ view='cal'; await _renderCal(); });
         popup.querySelector('#dp-my-ok')?.addEventListener('click', async()=>{
             dispY=pendY; dispM=pendM; 
