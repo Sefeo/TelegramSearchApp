@@ -165,7 +165,7 @@
     <script src="/static/js/render.js"></script>
     <script src="/static/js/chat.js"></script>
     <script src="/static/js/ui.js"></script>
-    <script src="/static/js/pulse.js?v=3"></script>
+    <script type="module" src="/static/js/pulse.js?v=6"></script>
     <script src="/static/js/init.js"></script>
 
     <!-- Pulse Dashboard Overlay -->
@@ -187,9 +187,9 @@
             <div class="pulse-card pulse-g-large">
                 <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 15px;">
                     <h3 class="pulse-card-title" style="margin: 0;">Circadian Rhythm 🕒</h3>
-                    <div style="display: flex; gap: 5px;">
-                        <button id="circ-tab-hourly" onclick="switchCircadianTab('hourly')" style="background: var(--pulse-bg); color: var(--pulse-text); border: 1px solid var(--pulse-border); border-radius: 4px; padding: 3px 8px; cursor: pointer; font-size: 11px;">By Hour</button>
-                        <button id="circ-tab-weekly" onclick="switchCircadianTab('weekly')" style="background: transparent; color: var(--pulse-text-muted); border: 1px solid transparent; border-radius: 4px; padding: 3px 8px; cursor: pointer; font-size: 11px;">By Day</button>
+                    <div class="cw-view-toggle">
+                        <button id="circ-tab-hourly" class="cw-view-btn active" onclick="switchCircadianTab('hourly')">By Hour</button>
+                        <button id="circ-tab-weekly" class="cw-view-btn" onclick="switchCircadianTab('weekly')">By Day</button>
                     </div>
                 </div>
                 <div id="circ-panel-hourly" class="pulse-chart-container"><canvas id="circadianChart"></canvas></div>

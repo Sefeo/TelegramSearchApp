@@ -1,0 +1,58 @@
+/* Pulse Dashboard - Consistency Grid (Time Matrix & Pulse Stream) */
+
+#cg-time-matrix { 
+    display: block; 
+    flex: 1; 
+    overflow-y: auto; 
+    overflow-x: hidden; 
+    padding-right: 8px; 
+    width: 100%; 
+    max-height: 450px; /* Approximately 3 years of data */
+    scrollbar-width: thin;
+    scrollbar-color: rgba(255,255,255,0.1) transparent;
+}
+.tm-year-block { margin-bottom: 25px; min-width: min-content; }
+.tm-year-label { font-size: 18px; font-weight: 800; color: rgba(255,255,255,0.2); margin-bottom: 8px; border-bottom: 1px solid rgba(255,255,255,0.05); padding-bottom: 4px; }
+.tm-wrapper { display: flex; gap: 4px; }
+.tm-dow-labels { display: flex; flex-direction: column; gap: 3px; font-size: 9px; color: var(--pulse-text-muted); padding-top: 18px; width: 24px; text-align: left; }
+.tm-dow-label { height: 10px; line-height: 10px; }
+.tm-main { display: flex; flex-direction: column; gap: 2px; flex: 1; overflow-x: auto; }
+.tm-month-row { display: flex; gap: 3px; font-size: 10px; color: var(--pulse-text-muted); margin-bottom: 2px; }
+.tm-month-label { width: 10px; text-align: left; white-space: nowrap; }
+.tm-grid { display: flex; gap: 3px; }
+.tm-week-col { display: flex; flex-direction: column; gap: 3px; }
+
+/* Pulse Stream Mode */
+/* Pulse Stream Mode - Wrapping Grid */
+#cg-pulse-stream { display: none; flex-wrap: wrap; align-content: flex-start; gap: 4px; flex: 1; padding: 15px; min-height: 100px; border-radius: 12px; background: rgba(0,0,0,0.2); border: 1px solid rgba(255,255,255,0.03); overflow-y: auto; }
+#cg-pulse-stream .cg-sq { width: 10px; height: 10px; flex-shrink: 0; transition: all 0.2s cubic-bezier(0.175, 0.885, 0.32, 1.275); }
+#cg-pulse-stream .cg-sq:hover { transform: scale(1.5); z-index: 10; box-shadow: 0 0 15px rgba(255,255,255,0.3); }
+
+/* Common Square Styles */
+.cg-sq { width: 10px; height: 10px; border-radius: 2px; background: rgba(255,255,255,0.03); cursor: pointer; transition: all 0.15s; position: relative; border: 1px solid rgba(0,0,0,0.1); }
+.cg-sq:hover { border-color: rgba(255,255,255,0.4); transform: scale(1.3); z-index: 5; box-shadow: 0 0 8px rgba(255,255,255,0.2); }
+
+/* Levels - Inferno Heatmap Style */
+.cg-l1 { background: #1a0f35; }
+.cg-l2 { background: #4d0e6b; }
+.cg-l3 { background: #7b1d6d; }
+.cg-l4 { background: #a62c64; }
+.cg-l5 { background: #d14250; }
+.cg-l6 { background: #f46b39; }
+.cg-l7 { background: #fc9f1f; }
+.cg-l8 { background: #fde12d; box-shadow: 0 0 10px rgba(253, 225, 45, 0.4); }
+
+.cg-supernova { background: #fff !important; box-shadow: 0 0 12px #fff, 0 0 20px #c084fc; border: 1px solid #c084fc; z-index: 2; animation: cg-pulse 2s infinite ease-in-out; }
+@keyframes cg-pulse { 0%, 100% { opacity: 1; transform: scale(1); } 50% { opacity: 0.8; transform: scale(1.1); } }
+
+/* Streaks (Stream mode only) */
+.cg-streak-start { border-top-left-radius: 3px; border-bottom-left-radius: 3px; }
+.cg-streak-mid { border-radius: 0; }
+.cg-streak-end { border-top-right-radius: 3px; border-bottom-right-radius: 3px; }
+
+/* Consistency Tooltip */
+#cg-tooltip { position: fixed; z-index: 100000; background: rgba(15, 23, 42, 0.95); backdrop-filter: blur(8px); padding: 12px; border-radius: 12px; border: 1px solid rgba(255,255,255,0.1); box-shadow: 0 10px 25px rgba(0, 0, 0, 0.5); font-size: 13px; color: #fff; pointer-events: none; display: none; width: 220px; line-height: 1.4; }
+.cg-tt-date { font-weight: 700; margin-bottom: 6px; color: #94a3b8; font-size: 11px; text-transform: uppercase; letter-spacing: 0.5px; }
+.cg-tt-total { font-size: 14px; font-weight: 800; margin-bottom: 8px; }
+.cg-tt-sender { display: flex; justify-content: space-between; font-size: 12px; margin-bottom: 2px; }
+.cg-tt-streak { margin-top: 8px; font-weight: 700; color: #f59e0b; font-size: 11px; }

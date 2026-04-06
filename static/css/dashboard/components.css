@@ -1,0 +1,218 @@
+/* Pulse Dashboard - Specialized components (Fingerprints, Words, Dynamics) */
+
+.pulse-chart-container {
+    flex: 1;
+    position: relative;
+    width: 100%;
+    min-height: 0;
+    height: 0; /* Important: allow flex parent to decide height */
+}
+
+.pulse-chart-container canvas {
+    position: absolute;
+    top: 0;
+    left: 0;
+    width: 100% !important;
+    height: 100% !important;
+}
+
+/* Fingerprints (Emoji/Sticker/GIF) */
+.pulse-emoji-list {
+    display: flex;
+    flex-direction: column;
+    gap: 12px;
+    overflow-y: auto;
+    flex: 1;
+    padding-right: 10px;
+}
+
+.pulse-emoji-item {
+    display: flex;
+    align-items: center;
+    background: rgba(0, 0, 0, 0.2);
+    border-radius: 8px;
+    padding: 8px 12px;
+}
+
+.pulse-emoji-icon {
+    font-size: 1.8rem;
+    margin-right: 15px;
+    width: 40px;
+    height: 40px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+}
+
+.pulse-emoji-icon img,
+.pulse-emoji-icon video {
+    max-width: 100%;
+    max-height: 100%;
+    border-radius: 4px;
+}
+
+/* Bars in fingerprints */
+.pulse-emoji-bar-container {
+    flex: 1;
+    height: 8px;
+    background: rgba(255, 255, 255, 0.1);
+    border-radius: 4px;
+    overflow: hidden;
+}
+
+.pulse-emoji-bar {
+    height: 100%;
+    background: linear-gradient(90deg, #3b82f6, #8b5cf6);
+}
+
+/* Signature Words Cloud */
+.pulse-word-cloud {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 10px;
+    align-content: center;
+    justify-content: center;
+    flex: 1;
+}
+
+.pulse-word {
+    padding: 5px 10px;
+    background: rgba(255, 255, 255, 0.05);
+    border-radius: 5px;
+    color: white;
+    font-weight: bold;
+    transition: transform 0.2s;
+}
+
+.pulse-word:hover { transform: scale(1.1); }
+
+/* Chat Dynamics System */
+.pulse-sender-battle {
+    display: flex;
+    flex-direction: column;
+    gap: 15px;
+    flex: 1;
+    justify-content: center;
+}
+
+.pulse-sb-row {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    padding: 10px;
+    background: rgba(0, 0, 0, 0.2);
+    border-radius: 8px;
+}
+
+.pulse-dynamics-tabs { display: flex; gap: 5px; }
+
+.pulse-dyn-tab {
+    background: transparent;
+    color: var(--pulse-text-muted);
+    border: 1px solid transparent;
+    border-radius: 4px;
+    padding: 4px 8px;
+    cursor: pointer;
+    transition: all 0.2s;
+}
+
+.pulse-dyn-tab.active {
+    background: var(--pulse-bg);
+    color: var(--pulse-text);
+    border-color: var(--pulse-border);
+}
+
+/* Tooltips */
+.pulse-tooltip { position: relative; cursor: help; }
+
+.pulse-tooltip-text {
+    visibility: hidden;
+    width: max-content;
+    background-color: #000;
+    color: #fff;
+    text-align: left;
+    border-radius: 6px;
+    padding: 8px 12px;
+    position: absolute;
+    z-index: 10;
+    bottom: 125%;
+    left: 50%;
+    transform: translateX(-50%);
+    opacity: 0;
+    transition: opacity 0.3s;
+    font-size: 12px;
+    pointer-events: none;
+    box-shadow: 0 4px 15px rgba(0, 0, 0, 0.5);
+    display: none !important; /* Hide old tooltips used as content sources */
+}
+
+/* Global Tooltip Styling */
+@keyframes towGrow { 0% { transform: scaleX(0); opacity: 0.5; } 100% { transform: scaleX(1); opacity: 1; } }
+.tow-row { margin-bottom: 14px; cursor: pointer; transition: transform 0.15s ease; }
+.tow-row:hover { transform: translateX(3px); }
+.tow-word-label { font-size: 12px; font-weight: 600; margin-bottom: 5px; display: flex; justify-content: space-between; align-items: center; color: var(--pulse-text); }
+.tow-word-total { font-size: 11px; color: var(--pulse-text-muted); font-weight: 400; }
+.tow-bar { height: 30px; border-radius: 20px; overflow: hidden; display: flex; background: rgba(255,255,255,0.04); animation: towGrow 0.8s cubic-bezier(0.22, 1, 0.36, 1) forwards; transform-origin: left; }
+.tow-segment { height: 100%; display: flex; align-items: center; justify-content: center; gap: 4px; overflow: hidden; position: relative; transition: width 0.8s cubic-bezier(0.22, 1, 0.36, 1); cursor: pointer; }
+.tow-segment img { width: 20px; height: 20px; border-radius: 50%; border: 1.5px solid rgba(255,255,255,0.5); flex-shrink: 0; }
+.tow-segment-label { font-size: 10px; font-weight: 700; color: #fff; text-shadow: 0 1px 3px rgba(0,0,0,0.5); white-space: nowrap; }
+
+/* Custom Words Matrix */
+.matrix-container { overflow-x: auto; overflow-y: auto; flex: 1; }
+.matrix-grid { display: grid; gap: 8px; align-items: center; justify-items: center; padding: 10px; }
+.matrix-header-cell { display: flex; flex-direction: column; align-items: center; gap: 3px; }
+.matrix-header-cell img { width: 28px; height: 28px; border-radius: 50%; border: 2px solid rgba(255,255,255,0.15); }
+.matrix-header-cell span { font-size: 9px; color: var(--pulse-text-muted); max-width: 60px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; text-align: center; }
+.matrix-row-label { font-size: 12px; font-weight: 600; color: var(--pulse-text); justify-self: end; padding-right: 8px; cursor: pointer; transition: color 0.15s; white-space: nowrap; }
+.matrix-row-label:hover { color: #c084fc; }
+.matrix-orb { width: 40px; height: 40px; border-radius: 50%; display: flex; align-items: center; justify-content: center; font-size: 10px; font-weight: 700; color: #fff; text-shadow: 0 1px 3px rgba(0,0,0,0.4); transition: all 0.3s cubic-bezier(0.22, 1, 0.36, 1); cursor: pointer; position: relative; }
+.matrix-orb:hover { transform: scale(1.3) !important; z-index: 5; }
+.matrix-row-highlight { background: rgba(255,255,255,0.03); border-radius: 8px; }
+
+/* Expanded State Scaling */
+.pulse-expanded .matrix-grid { gap: 25px; padding: 30px; }
+.pulse-expanded .matrix-orb { width: 90px; height: 90px; font-size: 18px; }
+.pulse-expanded .matrix-header-cell img { width: 60px; height: 60px; }
+.pulse-expanded .matrix-header-cell span { font-size: 13px; max-width: 120px; }
+.pulse-expanded .matrix-row-label { font-size: 20px; padding-right: 20px; }
+.pulse-expanded .tow-bar { height: 60px; border-radius: 30px; }
+.pulse-expanded .tow-segment img { width: 40px; height: 40px; }
+.pulse-expanded .tow-segment-label { font-size: 16px; }
+.pulse-expanded .tow-word-label { font-size: 18px; margin-bottom: 12px; }
+
+/* Custom Words Tags */
+#cw-tags { display: flex; flex-wrap: wrap; gap: 8px; margin: 15px 0; min-height: 32px; }
+.cw-tag { 
+    background: rgba(139, 92, 246, 0.15); 
+    border: 1px solid rgba(139, 92, 246, 0.3); 
+    color: #fff; 
+    padding: 4px 12px; 
+    border-radius: 20px; 
+    font-size: 13px; 
+    font-weight: 500;
+    display: flex; 
+    align-items: center; 
+    gap: 8px; 
+    animation: cwTagIn 0.3s cubic-bezier(0.175, 0.885, 0.32, 1.275); 
+    transition: all 0.2s;
+}
+.cw-tag:hover { background: rgba(139, 92, 246, 0.25); border-color: rgba(139, 92, 246, 0.5); }
+.cw-tag-x { 
+    cursor: pointer; 
+    opacity: 0.5; 
+    transition: all 0.2s; 
+    font-size: 10px; 
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    width: 16px;
+    height: 16px;
+    border-radius: 50%;
+    background: rgba(0,0,0,0.2);
+}
+.cw-tag-x:hover { opacity: 1; background: #ef4444; color: #fff; }
+.cw-tag.removing { animation: cwTagOut 0.25s forwards ease-in; opacity: 0; transform: scale(0.8); }
+
+/* Custom Words Animations */
+@keyframes cwTagIn { 0% { opacity: 0; transform: scale(0.5) translateY(5px); } 100% { opacity: 1; transform: scale(1) translateY(0); } }
+@keyframes cwTagOut { 0% { opacity: 1; transform: scale(1); } 100% { opacity: 0; transform: scale(0.5); } }
