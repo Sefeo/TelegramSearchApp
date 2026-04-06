@@ -272,6 +272,7 @@ async function loadRawDataAndRender() {
         if (pulseMonths.length === 0 && pulseRawMeta.min_date && pulseRawMeta.max_date) {
             initSlider(pulseRawMeta.min_date, pulseRawMeta.max_date);
         }
+        syncPulseDateDisplay();
         // Load messages into worker (once), then compute
         if (pulseWorker) {
             pulseWorkerLoaded = false;
@@ -295,6 +296,7 @@ async function loadRawDataAndRender() {
         if (pulseMonths.length === 0 && pulseRawMeta.min_date && pulseRawMeta.max_date) {
             initSlider(pulseRawMeta.min_date, pulseRawMeta.max_date);
         }
+        syncPulseDateDisplay();
 
         // Load messages into worker (once), then compute
         if (pulseWorker) {
@@ -370,9 +372,8 @@ function initSlider(minDate, maxDate) {
             document.getElementById('pulse-end-date').value = pulseMonths[vE].end;
             isProgrammaticDateChange = false;
 
-            // Debounce the recompute to avoid recalculating on every pixel drag
-            clearTimeout(sliderDebounce);
-            sliderDebounce = setTimeout(() => recomputeAndRender(), 150);
+            syncPulseDateDisplay();
+            // Removed instant recomputeAndRender to wait for "Apply Filter" click
         };
 
         startSlider.addEventListener('input', onInput);
@@ -476,6 +477,7 @@ function applyPulseDateFilter(fromSlider = false) {
         isProgrammaticDateChange = false;
         updateDualSliderUI();
     }
+    syncPulseDateDisplay();
     recomputeAndRender();
 }
 
@@ -491,6 +493,7 @@ function resetPulseDateFilter() {
     }
     isProgrammaticDateChange = false;
     updateDualSliderUI();
+    syncPulseDateDisplay();
     recomputeAndRender();
 }
 
@@ -2115,4 +2118,33 @@ function initPulseSliders() {
             });
         }
     });
+}
+
+function openPulseDatePicker(anchor, type) {
+    const inputId = type === 'start' ? 'pulse-start-date' : 'pulse-end-date';
+    const input = document.getElementById(inputId);
+    if (!input) return;
+
+    DatePicker.open({
+        anchorEl: anchor,
+        value: input.value,
+        confirmLabel: 'Apply',
+        showClear: true,
+        onConfirm: (val) => {
+            input.value = val || '';
+            syncPulseDateDisplay();
+            // Unlike search, we don't auto-apply here because 
+            // dashboard might have many filters; user clicks "Apply Filter"
+        }
+    });
+}
+
+function syncPulseDateDisplay() {
+    const sVal = document.getElementById('pulse-start-date')?.value;
+    const eVal = document.getElementById('pulse-end-date')?.value;
+    const sDisp = document.getElementById('pulse-start-date-disp');
+    const eDisp = document.getElementById('pulse-end-date-disp');
+    
+    if (sDisp) sDisp.textContent = sVal || 'Not set';
+    if (eDisp) eDisp.textContent = eVal || 'Not set';
 }
