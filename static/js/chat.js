@@ -14,6 +14,27 @@
             }
         }
 
+        // --- Floating date pill detection ---
+        function getFloatingSpans() {
+            const chatRect = chat.getBoundingClientRect();
+            const cs = window.getComputedStyle(chat);
+            const paddingTop = parseFloat(cs.paddingTop) || 0;
+            const stickyTop = document.body.classList.contains('player-open') ? 60 : 10;
+            // Sticky elements stick to the content box, so we must add the parent's padding
+            const stuckY = chatRect.top + paddingTop + stickyTop;
+
+            let results = [];
+            chat.querySelectorAll('.date-divider').forEach(d => {
+                const top = d.getBoundingClientRect().top;
+                // If it is at the sticky ceiling (within 5px rounding tolerance)
+                if (Math.abs(top - stuckY) < 5) {
+                    const span = d.querySelector('span');
+                    if (span) results.push(span);
+                }
+            });
+            return results;
+        }
+
         async function loadOlder() {
             if (isFetching || allOldLoaded || !oldestMsgId) return;
             isFetching = true;
@@ -145,13 +166,32 @@
             // Calculate if we should hide the down arrow
             document.getElementById('btn-down').style.display = (allNewLoaded && chat.scrollHeight - chat.scrollTop <= chat.clientHeight + 100) ? 'none' : 'flex';
             
-            // Floating date pill logic
-            const elements = document.elementsFromPoint(window.innerWidth / 2, 80);
-            if (elements) {
-                const msgRow = elements.find(el => el.classList && el.classList.contains('msg-row'));
-                if (msgRow) document.getElementById('date-pill').innerText = formatDateText(msgRow.getAttribute('data-date'));
-            }
-			
+            // --- Scroll-idle auto-fade for the floating date pill ---
+            const floatingSpans = getFloatingSpans();
+            // The one the user should actually see is the last one in the DOM order
+            const topFloatingSpan = floatingSpans.length > 0 ? floatingSpans[floatingSpans.length - 1] : null;
+
+            // Restore pills, but INSTANTLY hide overlapped floating ones
+            // This prevents anti-aliased text edges from stacking and looking "torn"
+            chat.querySelectorAll('.date-divider span').forEach(s => {
+                if (floatingSpans.includes(s) && s !== topFloatingSpan) {
+                    s.style.transition = 'none';
+                    s.style.opacity = '0';
+                } else {
+                    s.style.transition = 'opacity 0.3s ease';
+                    s.style.opacity = '1';
+                    s.style.display = '';
+                }
+            });
+
+            clearTimeout(chat._scrollIdleTimer);
+            chat._scrollIdleTimer = setTimeout(() => {
+                if (topFloatingSpan) {
+                    topFloatingSpan.style.transition = 'opacity 0.4s ease';
+                    topFloatingSpan.style.opacity = '0';
+                }
+            }, 1000);
+
 			updatePinnedBar(); 
         });
 

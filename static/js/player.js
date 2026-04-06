@@ -248,6 +248,7 @@
             const safePath = encodeURIComponent(path);
             engine.src = `/media?path=${safePath}`;
             playerBar.style.display = 'flex';
+            document.body.classList.add('player-open');
             engine.playbackRate = speeds[currentSpeedIdx];
             engine.play();
             playPauseBtn.innerText = "⏸";
@@ -332,7 +333,7 @@
             else { engine.pause(); vidPreview.pause(); playPauseBtn.innerText = "▶"; }
         }
 
-        function closePlayer() { engine.pause(); vidPreview.pause(); playerBar.style.display = 'none'; }
+        function closePlayer() { engine.pause(); vidPreview.pause(); playerBar.style.display = 'none'; document.body.classList.remove('player-open'); }
         
         function cycleSpeed() {
             currentSpeedIdx = (currentSpeedIdx + 1) % speeds.length;

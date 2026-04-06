@@ -10,33 +10,50 @@
             background-image: url('https://www.transparenttextures.com/patterns/stardust.png');
         }
 
-        /* Top Bar & Floating Date */
-        .top-bar { position: absolute; top: 10px; left: 0; width: 100%; display: flex; justify-content: center; z-index: 100; pointer-events: none; }
-        .date-pill { background-color: rgba(24, 37, 51, 0.8); backdrop-filter: blur(5px); padding: 4px 12px; border-radius: 12px; font-size: 13px; color: white; font-weight: 500; }
+        /* Top Bar & Floating Date (hidden; replaced by sticky date dividers) */
+        .top-bar { display: none; }
+        .date-pill { display: none; }
 
-		/* Date Divider */
+        /* When the audio player bar is open, offset pinned bar and sticky date dividers */
+        :root { --player-offset: 0px; }
+        body.player-open { --player-offset: 50px; }
+
+		/* Date Divider — Sticky Telegram-style */
         .date-divider {
             text-align: center;
-            margin: 15px 0;
-            position: relative;
+            padding: 10px 0;
+            position: sticky;
+            top: calc(10px + var(--player-offset, 0px));
+            z-index: 50;
             display: flex;
             justify-content: center;
+            pointer-events: none;
+            transition: top 0.3s ease;
         }
         .date-divider span {
-            background-color: rgba(24, 37, 51, 0.6);
-            backdrop-filter: blur(5px);
+            background-color: rgba(24, 37, 51, 0.5);
+            backdrop-filter: blur(4px);
             padding: 4px 12px;
             border-radius: 12px;
             font-size: 13px;
             color: white;
             font-weight: 600;
+            pointer-events: auto;
+        }
+        @keyframes dateDividerFadeIn {
+            from { opacity: 0; transform: translateY(-4px); }
+            to   { opacity: 1; transform: translateY(0); }
         }
 		
 		/* Pinned Messages Bar */
         #pinned-bar {
-            position: absolute; top: 10px; right: 20%; left: 20%; background: #242f3d;
+            position: absolute;
+            top: calc(10px + var(--player-offset, 0px));
+            right: 20%; left: 20%; background: #242f3d;
             border-left: 3px solid var(--accent); padding: 6px 15px; border-radius: 6px;
-            cursor: pointer; z-index: 90; display: none; align-items: center; box-shadow: 0 4px 10px rgba(0,0,0,0.5);
+            cursor: pointer; z-index: 90; display: none; align-items: center;
+            box-shadow: 0 4px 10px rgba(0,0,0,0.5);
+            transition: top 0.3s ease;
         }
         #pinned-bar:hover { background: #2b394a; }
         .pinned-title { color: var(--accent); font-weight: bold; font-size: 14px; margin-bottom: 2px; }
@@ -286,7 +303,7 @@
         .fwd-date { font-size: 11px; color: var(--text-muted); }
 
         /* Main Chat Area */
-        .chat-container { flex-grow: 1; overflow-y: auto; padding: 60px 20%; display: flex; flex-direction: column; }
+        .chat-container { flex-grow: 1; overflow-y: auto; padding: 60px 20%; display: flex; flex-direction: column; position: relative; }
         .msg-row { display: flex; margin-bottom: 8px; align-items: flex-end; }
         .avatar { width: 42px; height: 42px; border-radius: 50%; margin-right: 12px; background-color: #3b5998; object-fit: cover; flex-shrink: 0; align-self: flex-end; }
         .bubble { background-color: var(--message-other); padding: 6px 12px 8px 12px; border-radius: 14px; border-bottom-left-radius: 4px; max-width: 70%; position: relative; }
