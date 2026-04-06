@@ -38,21 +38,36 @@
     margin-bottom: 20px;
 }
 
-#pulse-loading {
+.pulse-card-loader {
     display: none;
-    position: fixed;
-    background: rgba(15, 23, 42, 0.95);
-    padding: 15px 25px;
-    border-radius: 50px;
-    border: 1px solid rgba(255, 255, 255, 0.2);
-    z-index: 10000;
-    pointer-events: none;
+    position: absolute;
+    top: 0;
+    left: 0;
+    width: 100%;
+    height: 100%;
+    background: rgba(15, 23, 42, 0.7);
+    backdrop-filter: blur(4px);
+    border-radius: 16px;
+    z-index: 50;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    opacity: 0;
     transition: opacity 0.2s;
-    color: white;
-    font-size: 16px;
-    text-align: center;
-    box-shadow: 0 10px 30px rgba(0, 0, 0, 0.5);
-    backdrop-filter: blur(5px);
+    pointer-events: none;
+}
+
+.pulse-card.is-loading .pulse-card-loader {
+    display: flex;
+    opacity: 1;
+    pointer-events: auto;
+}
+
+.pulse-card.is-loading > :not(.pulse-card-loader) {
+    opacity: 0.3;
+    filter: blur(3px);
+    pointer-events: none;
+    transition: all 0.2s;
 }
 
 .pulse-spinner {
@@ -183,6 +198,28 @@
     background: rgba(255,255,255,0.12);
     color: rgba(255,255,255,0.8);
     transform: scale(1.1);
+}
+
+/* Reserve room for the expand button in every card's top-level header row,
+   so existing tab/control buttons don't overlap it. */
+.pulse-card > div:first-child {
+    padding-right: 38px;
+    box-sizing: border-box;
+}
+
+/* Signature Words header is too crowded for a single row.
+   Stack the title and tabs vertically to make room for the button. */
+#wordsCard > div:first-child {
+    flex-direction: column;
+    align-items: flex-start !important;
+    gap: 8px;
+    padding-right: 0 !important;
+    padding-left: 0 !important;
+}
+#wordsCard .pulse-expand-btn {
+    top: 12px;
+    right: 12px;
+    left: auto;
 }
 
 /* Expanded state */
@@ -1005,3 +1042,73 @@
     border-width: 2px;
     margin: 0;
 }
+
+/* ========== Dashboard Sliders — Premium Look ========== */
+.pulse-overlay input[type="range"]:not(.pulse-dual-thumb) {
+    -webkit-appearance: none;
+    appearance: none;
+    width: 100%;
+    background: transparent;
+    cursor: pointer;
+    margin: 5px 0;
+    padding: 0 !important; /* Force override */
+    border: none !important;
+}
+
+/* Chrome/Safari single-thumb track */
+.pulse-overlay input[type="range"]:not(.pulse-dual-thumb)::-webkit-slider-runnable-track {
+    width: 100%;
+    height: 6px;
+    background: rgba(255, 255, 255, 0.1);
+    border-radius: 3px;
+    border: none;
+    transition: background 0.3s ease;
+}
+
+.pulse-overlay input[type="range"]:not(.pulse-dual-thumb):hover::-webkit-slider-runnable-track {
+    background: rgba(255, 255, 255, 0.15);
+}
+
+/* Chrome/Safari single-thumb thumb */
+.pulse-overlay input[type="range"]:not(.pulse-dual-thumb)::-webkit-slider-thumb {
+    -webkit-appearance: none;
+    height: 16px;
+    width: 16px;
+    border-radius: 50%;
+    background: var(--pulse-accent);
+    border: 2.5px solid white;
+    cursor: pointer;
+    margin-top: -5px; /* (track-height/2) - (thumb-height/2) => 3 - 8 = -5 */
+    box-shadow: 0 0 10px rgba(0, 0, 0, 0.4);
+    transition: transform 0.15s cubic-bezier(0.175, 0.885, 0.32, 1.275);
+}
+
+.pulse-overlay input[type="range"]:not(.pulse-dual-thumb):active::-webkit-slider-thumb {
+    transform: scale(1.3);
+    background: white;
+    border-color: var(--pulse-accent);
+}
+
+/* Firefox Support */
+.pulse-overlay input[type="range"]:not(.pulse-dual-thumb)::-moz-range-track {
+    width: 100%;
+    height: 6px;
+    background: rgba(255, 255, 255, 0.1);
+    border-radius: 3px;
+    border: none;
+}
+
+.pulse-overlay input[type="range"]:not(.pulse-dual-thumb)::-moz-range-thumb {
+    height: 16px;
+    width: 16px;
+    border-radius: 50%;
+    background: var(--pulse-accent);
+    border: 2.5px solid white;
+    box-shadow: 0 0 10px rgba(0, 0, 0, 0.4);
+}
+
+.pulse-overlay input[type="range"]:not(.pulse-dual-thumb)::-moz-range-progress {
+    background: var(--pulse-accent);
+    height: 6px;
+    border-radius: 3px;
+}

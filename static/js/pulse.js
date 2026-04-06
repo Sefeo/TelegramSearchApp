@@ -11,13 +11,12 @@ let isProgrammaticDateChange = false;
 // Client-side data cache
 let pulseRawMessages = null;  // All messages from /api/pulse_raw (fetched once)
 let pulseRawMeta = null;      // min_date, max_date from the raw endpoint
-let pulseLastMousePos = { x: window.innerWidth / 2, y: window.innerHeight / 2 };
 
 // Web Worker for computation (never freezes the UI)
 let pulseWorker = null;
 let pulseWorkerLoaded = false;  // true once the worker has received the 'load' message
 try {
-    pulseWorker = new Worker('/static/js/pulse_worker.js');
+    pulseWorker = new Worker('/static/js/pulse_worker.js?v=2');
     pulseWorker.onmessage = function (e) {
         const { type } = e.data;
 
@@ -106,7 +105,7 @@ async function idbSet(value) {
 }
 
 // Send only small filter params to the worker — never the full message array
-function _triggerCompute() {
+function _triggerCompute(targetCardIds = null) {
     if (!pulseWorker || !pulseWorkerLoaded) return;
 
     const startDate = document.getElementById('pulse-start-date')?.value || '';
@@ -120,58 +119,59 @@ function _triggerCompute() {
     const pctInput = document.getElementById('pulse-word-pct');
     const targetPct = pctInput ? parseInt(pctInput.value) / 100.0 : 0.10;
 
-    showPulseLoader();
-    pulseWorker.postMessage({
-        type: 'compute',
-        senders: Array.from(pulseCurrentSenders),
-        allSendersCount: allSendersList.length,
-        startDate,
-        endDate,
-        maxNGram,
-        minUsage,
-        maxUsage,
-        targetPct
+    showPulseLoader(targetCardIds);
+    
+    // Yield to let the browser paint the loaders before blocking the thread
+    requestAnimationFrame(() => {
+        requestAnimationFrame(() => {
+            pulseWorker.postMessage({
+                type: 'compute',
+                senders: Array.from(pulseCurrentSenders),
+                allSendersCount: allSendersList.length,
+                startDate,
+                endDate,
+                maxNGram,
+                minUsage,
+                maxUsage,
+                targetPct
+            });
+        });
     });
 }
 
-// Track mouse position for floating loader
-document.addEventListener('mousemove', (e) => {
-    pulseLastMousePos.x = e.clientX;
-    pulseLastMousePos.y = e.clientY;
-    const loader = document.getElementById('pulse-loading');
-    if (loader && loader.style.display === 'block') {
-        positionFloatingLoader(loader);
+function showPulseLoader(targetCardIds = null) {
+    let cards = [];
+    if (targetCardIds && Array.isArray(targetCardIds) && targetCardIds.length > 0) {
+        // Clear EVERY loading state first to isolate it
+        document.querySelectorAll('.pulse-card.is-loading').forEach(c => c.classList.remove('is-loading'));
+        
+        targetCardIds.forEach(id => {
+            const el = document.getElementById(id);
+            if (el) cards.push(el);
+        });
+    } else {
+        cards = document.querySelectorAll('.pulse-card');
     }
-});
-
-function positionFloatingLoader(loader) {
-    const offsetX = 20;
-    const offsetY = 20;
-    let x = pulseLastMousePos.x + offsetX;
-    let y = pulseLastMousePos.y + offsetY;
-
-    // Keep within viewport
-    const rect = loader.getBoundingClientRect();
-    if (x + rect.width > window.innerWidth) x = pulseLastMousePos.x - rect.width - offsetX;
-    if (y + rect.height > window.innerHeight) y = pulseLastMousePos.y - rect.height - offsetY;
-    if (x < 0) x = 10;
-    if (y < 0) y = 10;
-
-    loader.style.left = x + 'px';
-    loader.style.top = y + 'px';
-}
-
-function showPulseLoader() {
-    const loader = document.getElementById('pulse-loading');
-    if (loader) {
-        loader.style.display = 'block';
-        positionFloatingLoader(loader);
-    }
+    
+    cards.forEach(card => {
+        let loader = card.querySelector('.pulse-card-loader');
+        if (!loader) {
+            loader = document.createElement('div');
+            loader.className = 'pulse-card-loader';
+            loader.innerHTML = `
+                <div class="pulse-spinner" style="border-top-color: #c084fc; width: 24px; height: 24px; border-width: 2px;"></div>
+                <div style="margin-top: 8px; font-size: 12px; color: rgba(255,255,255,0.7); font-weight: 500;">Calculating...</div>
+            `;
+            card.appendChild(loader);
+        }
+        card.classList.add('is-loading');
+    });
 }
 
 function hidePulseLoader() {
-    const loader = document.getElementById('pulse-loading');
-    if (loader) loader.style.display = 'none';
+    document.querySelectorAll('.pulse-card.is-loading').forEach(card => {
+        card.classList.remove('is-loading');
+    });
 }
 
 function togglePulseDashboard() {
@@ -181,6 +181,7 @@ function togglePulseDashboard() {
         if (!pulseRawMessages) {
             initPulse();
         }
+        initPulseSliders();
         injectExpandButtons();
     } else {
         dash.classList.add('pulse-hidden');
@@ -230,11 +231,15 @@ async function initPulse() {
 
     pulseCurrentSenders = new Set(allSendersList.slice(0, 5).map(s => s.name));
     renderSenderToggles();
+    initPulseSliders();
     await loadRawDataAndRender();
 }
 
 async function loadRawDataAndRender() {
     showPulseLoader();
+    
+    // Yield so loaders appear instantly
+    await new Promise(r => requestAnimationFrame(() => requestAnimationFrame(r)));
 
     // 0. Fetch db_sig from standard API to invalidate cache if DB changed
     let serverSig = null;
@@ -305,8 +310,14 @@ async function loadRawDataAndRender() {
 
 function recomputeAndRender() {
     if (!pulseRawMessages) return;
-    // Messages are already in the worker — just send filter params
+    // By default, full re-render uses all cards
     _triggerCompute();
+}
+
+function recomputeSignatureWords() {
+    if (!pulseRawMessages) return;
+    // Force strict isolation: only wordsCard gets the loader
+    _triggerCompute(['wordsCard']);
 }
 
 // filterMessages and computePulseStats are now in pulse_worker.js (Web Worker)
@@ -636,6 +647,7 @@ function renderCharts() {
                     }]
                 },
                 options: {
+                    animation: false,
                     responsive: true,
                     maintainAspectRatio: false,
                     scales: {
@@ -705,6 +717,7 @@ function renderCharts() {
                     }]
                 },
                 options: {
+                    animation: false,
                     responsive: true,
                     maintainAspectRatio: false,
                     scales: { r: { ticks: { display: false }, grid: { color: 'rgba(255,255,255,0.08)' } } },
@@ -1021,8 +1034,20 @@ async function fetchAndRenderChatDynamics() {
     
     lastDynamicsFetchParams = currentParams;
     
-    const loader = document.getElementById('dynamics-loader');
-    if (loader) loader.style.display = 'block';
+    const card = document.getElementById('chatDynamicsCard');
+    if (card) {
+        let loader = card.querySelector('.pulse-card-loader');
+        if (!loader) {
+            loader = document.createElement('div');
+            loader.className = 'pulse-card-loader';
+            loader.innerHTML = `
+                <div class="pulse-spinner" style="border-top-color: #c084fc; width: 24px; height: 24px; border-width: 2px;"></div>
+                <div style="margin-top: 8px; font-size: 12px; color: rgba(255,255,255,0.7); font-weight: 500;">Calculating...</div>
+            `;
+            card.appendChild(loader);
+        }
+        card.classList.add('is-loading');
+    }
     
     // Hide all containers safely via iteration
     ['messages', 'icebreaker', 'ghosting', 'length', 'burst'].forEach(id => {
@@ -1042,10 +1067,25 @@ async function fetchAndRenderChatDynamics() {
         dynamicsData = await res.json();
     } catch (e) {
         console.error("Error fetching chat dynamics", e);
-        if (loader) loader.innerHTML = `<div style="color:red;">Failed to load data.</div>`;
+        lastDynamicsFetchParams = null; // Reset so next attempt can retry
+        if (card) {
+            let loader = card.querySelector('.pulse-card-loader');
+            if (loader) {
+                loader.innerHTML = `<div style="color:red; font-size:12px; margin-top:10px;">Failed to load data.</div>`;
+            }
+        }
         return;
     } finally {
-        if (loader) loader.style.display = 'none';
+        // Always remove loading regardless of outcome
+        if (card) {
+            card.classList.remove('is-loading');
+            let loader = card.querySelector('.pulse-card-loader');
+            if (loader) {
+                loader.innerHTML = `
+                <div class="pulse-spinner" style="border-top-color: #c084fc; width: 24px; height: 24px; border-width: 2px;"></div>
+                <div style="margin-top: 8px; font-size: 12px; color: rgba(255,255,255,0.7); font-weight: 500;">Calculating...</div>`;
+            }
+        }
     }
 
     // Unhide the active container
@@ -1053,6 +1093,12 @@ async function fetchAndRenderChatDynamics() {
     if (activeCont) activeCont.style.display = 'block';
 
     renderCurrentDynamicsTab();
+}
+
+// Called by the "Apply & Fetch" button — busts the JS cache so slider changes always trigger a fresh network request
+async function applyAndFetchDynamics() {
+    lastDynamicsFetchParams = null;
+    await fetchAndRenderChatDynamics();
 }
 
 function renderCurrentDynamicsTab() {
@@ -2029,4 +2075,44 @@ function deepLinkSearch(word) {
         searchInput.value = word;
         if (typeof executeSearch === 'function') executeSearch();
     }
+}
+// --- Dashboard UI Helpers for Sliders ---
+
+function syncPulseSlider(sliderId, labelId = null, unit = '') {
+    const slider = document.getElementById(sliderId);
+    if (!slider) return;
+    
+    // Update label if it exists
+    if (labelId) {
+        const label = document.getElementById(labelId);
+        if (label) label.textContent = slider.value + unit;
+    }
+    
+    // Update the visual "fill bar" for Chrome/Webkit browsers via linear-gradient
+    const min = slider.min || 0;
+    const max = slider.max || 100;
+    const val = ((slider.value - min) / (max - min)) * 100;
+    slider.style.background = `linear-gradient(to right, #3b82f6 0%, #3b82f6 ${val}%, rgba(255,255,255,0.1) ${val}%, rgba(255,255,255,0.1) 100%)`;
+}
+
+function initPulseSliders() {
+    const sliders = [
+        { id: 'pulse-word-pct', label: 'pulse-word-pct-val', unit: '%' },
+        { id: 'pulse-ice-gap', label: 'pulse-ice-val', unit: 'h' },
+        { id: 'pulse-ghs-gap', label: 'pulse-ghs-val', unit: 'h' }
+    ];
+    
+    sliders.forEach(config => {
+        const slider = document.getElementById(config.id);
+        if (slider) {
+            // Initial sync
+            syncPulseSlider(config.id, config.label, config.unit);
+            
+            // On input sync
+            slider.addEventListener('input', (e) => {
+                e.stopPropagation(); // Stop bubbling to prevent accidental dashboard-wide refreshes
+                syncPulseSlider(config.id, config.label, config.unit);
+            });
+        }
+    });
 }

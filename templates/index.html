@@ -165,15 +165,12 @@
     <script src="/static/js/render.js"></script>
     <script src="/static/js/chat.js"></script>
     <script src="/static/js/ui.js"></script>
-    <script src="/static/js/pulse.js"></script>
+    <script src="/static/js/pulse.js?v=3"></script>
     <script src="/static/js/init.js"></script>
 
     <!-- Pulse Dashboard Overlay -->
     <div id="pulse-dashboard" class="pulse-overlay pulse-hidden">
-        <div id="pulse-loading">
-            <div class="pulse-spinner"></div>
-            <div>Calculating...</div>
-        </div>
+
         <div class="pulse-header">
             <h2 class="pulse-title">Chat Pulse</h2>
             <div class="pulse-controls">
@@ -246,18 +243,12 @@
                             <input type="range" id="pulse-ghs-gap" min="1" max="12" value="4" style="width: 100%;">
                             <span id="pulse-ghs-val" style="width: 24px; text-align: right;">4h</span>
                         </div>
-                        <button class="pulse-btn" style="padding: 3px 8px; font-size: 10px; width: 100%; margin-top: 2px;" onclick="fetchAndRenderChatDynamics()">Apply &amp; Fetch</button>
-                        <script>
-                            document.getElementById('pulse-ice-gap').addEventListener('input', e => document.getElementById('pulse-ice-val').textContent = e.target.value + 'h');
-                            document.getElementById('pulse-ghs-gap').addEventListener('input', e => document.getElementById('pulse-ghs-val').textContent = e.target.value + 'h');
-                        </script>
+                        <button class="pulse-btn" style="padding: 3px 8px; font-size: 10px; width: 100%; margin-top: 2px;" onclick="applyAndFetchDynamics()">Apply &amp; Fetch</button>
                     </div>
                 </div>
+
                 
-                <div id="dynamics-loader" style="display: none; text-align: center; padding: 20px; color: var(--pulse-primary);">
-                    <div class="pulse-spinner" style="border-color: rgba(192, 132, 252, 0.2); border-top-color: #c084fc;"></div>
-                    <div style="margin-top: 10px; font-size: 12px;">Analyzing conversations...</div>
-                </div>
+
                 
                 <!-- The actual content containers -->
                 <div id="dyn-content-messages" class="pulse-sender-battle"></div>
@@ -303,16 +294,12 @@
                                 <input type="number" id="pulse-word-max" min="1" value="1000" style="width: 50px; background: rgba(255,255,255,0.1); border: 1px solid var(--glass-border); color: white; border-radius: 4px; padding: 2px 5px; outline: none;" title="Max. Usage">
                             </div>
                         </div>
-                        <button class="pulse-btn" style="padding: 4px 8px; font-size: 11px; width: 100%; margin-top: 5px;" onclick="recomputeAndRender()">Apply Filters</button>
+                        <button class="pulse-btn" style="padding: 4px 8px; font-size: 11px; width: 100%; margin-top: 5px;" onclick="recomputeSignatureWords()">Apply Filters</button>
                     </div>
 
                     <div class="pulse-word-cloud" id="signatureWords" style="flex: 1; overflow-y: auto;"></div>
-                    <script>
-                        document.getElementById('pulse-word-pct').addEventListener('input', e => {
-                            document.getElementById('pulse-word-pct-val').textContent = e.target.value + '%';
-                        });
-                    </script>
                 </div>
+
 
                 <!-- Custom panel (new) -->
                 <div id="sigwords-panel-custom" style="display: none; flex-direction: column; flex: 1; min-height: 0; gap: 10px;">
@@ -363,11 +350,17 @@
                 <div style="display: flex; gap: 15px; align-items: flex-end; width: 100%; flex-wrap: wrap;">
                     <div>
                         <label style="font-size: 12px; color: var(--pulse-text-muted);">Precise Start Date</label><br>
-                        <input type="date" id="pulse-start-date" style="color-scheme: dark; background: rgba(0,0,0,0.2); border: 1px solid rgba(255,255,255,0.1); color: white; border-radius: 4px; padding: 5px;">
+                        <button class="dp-trigger" id="pulse-start-date-btn" onclick="openPulseDatePicker(this, 'start')" style="margin-bottom: 0; font-size: 12px; padding: 6px 10px; width: auto; min-width: 130px;">
+                            <span id="pulse-start-date-disp">Not set</span> &#128197;
+                        </button>
+                        <input type="hidden" id="pulse-start-date">
                     </div>
                     <div>
                         <label style="font-size: 12px; color: var(--pulse-text-muted);">Precise End Date</label><br>
-                        <input type="date" id="pulse-end-date" style="color-scheme: dark; background: rgba(0,0,0,0.2); border: 1px solid rgba(255,255,255,0.1); color: white; border-radius: 4px; padding: 5px;">
+                        <button class="dp-trigger" id="pulse-end-date-btn" onclick="openPulseDatePicker(this, 'end')" style="margin-bottom: 0; font-size: 12px; padding: 6px 10px; width: auto; min-width: 130px;">
+                            <span id="pulse-end-date-disp">Not set</span> &#128197;
+                        </button>
+                        <input type="hidden" id="pulse-end-date">
                     </div>
                     <button class="pulse-btn" onclick="applyPulseDateFilter()">Apply Filter</button>
                     <button class="pulse-btn" style="background: rgba(255,255,255,0.1);" onclick="resetPulseDateFilter()">Reset & Show All Time</button>

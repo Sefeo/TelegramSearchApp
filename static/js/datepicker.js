@@ -145,7 +145,7 @@ const DatePicker = (() => {
 
         if(top < 10) top = 10;
         if(left < 10) left = 10;
-        Object.assign(popup.style,{position:'fixed',left:left+'px',top:top+'px',width:W+'px',zIndex:'9999'});
+        Object.assign(popup.style,{position:'fixed',left:left+'px',top:top+'px',width:W+'px',zIndex:'10001'});
     }
 
     function _outside(e){ if(popup && !popup.contains(e.target) && !anchor?.contains(e.target)) close(); }
