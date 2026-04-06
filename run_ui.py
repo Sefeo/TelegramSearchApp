@@ -40,7 +40,7 @@ def gzip_response(response):
         and len(response.get_data()) > 1024  # Only compress if > 1KB
     ):
         buf = io.BytesIO()
-        with gzip.GzipFile(fileobj=buf, mode='wb', compresslevel=6) as gz:
+        with gzip.GzipFile(fileobj=buf, mode='wb', compresslevel=1) as gz:
             gz.write(response.get_data())
         response.set_data(buf.getvalue())
         response.headers['Content-Encoding'] = 'gzip'
@@ -53,9 +53,11 @@ def dict_factory(cursor, row):
         d[col[0]] = row[idx]
     return d
    
+_SENDER_CLEAN_RE = re.compile(r'\s+\d{2}\.\d{2}\.\d{4}\s+\d{2}:\d{2}:\d{2}$')
+
 def clean_sender_name(name):
     # This removes the " DD.MM.YYYY HH:MM:SS" from the end of the string
-    return re.sub(r'\s+\d{2}\.\d{2}\.\d{4}\s+\d{2}:\d{2}:\d{2}$', '', name)
+    return _SENDER_CLEAN_RE.sub('', name)
  
 @app.route('/')
 def home():
@@ -621,20 +623,27 @@ def pulse_raw():
         rows = c.fetchall()
         conn.close()
         
-        # Pre-clean sender names server-side and build compact records
+        # Pre-clean sender names server-side using lookup table and build compact records
+        sender_lookup = {}
         messages = []
         for msg_id, sender, ts, media_type, text_content, media_path, size in rows:
-            cleaned = clean_sender_name(sender) if sender else "Unknown"
+            if sender not in sender_lookup:
+                sender_lookup[sender] = clean_sender_name(sender)
+            cleaned = sender_lookup[sender]
+            
             if cleaned == 'System':
                 continue
-            item = {
-                'i': msg_id,         # id
-                's': cleaned,         # sender (cleaned)
-                't': ts[:19] if ts else None,              # timestamp
-                'm': media_type,      # media_type (can be None)
-                'x': text_content,    # text_content (can be None)
-                'p': media_path       # media_path (can be None)
-            }
+            
+            # Build compact record; omit nulls to save bytes
+            item = {'i': msg_id, 's': cleaned}
+            if ts: item['t'] = ts[:19]
+            if media_type: item['m'] = media_type
+            if text_content: item['x'] = text_content
+            
+            # Only include media_path if there is media (per user request)
+            if media_type and media_path:
+                item['p'] = media_path
+                
             if size is not None:
                 item['z'] = size      # Exact file size for exact matching
             messages.append(item)
