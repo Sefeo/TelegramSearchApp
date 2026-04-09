@@ -9,6 +9,7 @@ import json
 import sys
 import concurrent.futures
 import time
+import html
 
 try:
     import cv2
@@ -218,26 +219,36 @@ def parse_folder(conn, folder_path, folder_name):
                     else:
                         media_links = msg.find_all('a', href=True)
                         for link in media_links:
-                            href = link['href']
+                            # Use unescape to handle filenames with &apos;, etc.
+                            href = html.unescape(link['href'])
                             is_video_block = 'media_video' in link.get('class', [])
                             title_div = link.find('div', class_='title')
                             title_text = title_div.text.strip() if title_div else ""
+                            status_div = link.find('div', class_='status')
+                            status_text = status_div.text.strip() if status_div else ""
 
                             if href.startswith('photos/'): media_type = 'photo'
                             elif href.startswith('voice_messages/'): media_type = 'voice'
                             elif href.startswith('round_video_messages/'): media_type = 'round_video'
                             elif href.startswith('files/'): media_type = 'file'
-                            elif href.startswith('video_files/') or is_video_block:
-                                # Improved GIF detection: check if "Animation" text is present in the title OR status
-                                status_div = link.find('div', class_='status')
-                                status_text = status_div.text.strip() if status_div else ""
+                            elif href.startswith('video_files/') or is_video_block or 'animated_wrap' in link.get('class', []):
+                                # Synchronized heuristic from reclassify_media.py
+                                is_anim = ("Animation" in title_text or 
+                                           "Animation" in status_text or 
+                                           "GIF" in link.text or
+                                           href.startswith(('animated_stickers/', 'animations/')) or 
+                                           any(kw in href.lower() for kw in ['sticker', 'anim', 'result.mp4']) or
+                                           'animated_wrap' in link.get('class', []) or
+                                           link.find('div', class_='gif_play'))
                                 
-                                if "Animation" in title_text or "Animation" in status_text or href.startswith('animated_stickers/') or href.startswith('animations/'):
+                                # Round videos are never animations, even if they're in video_files accidentally
+                                if is_anim and not href.startswith('round_video_messages/'):
                                     media_type = 'gif'
                                 else:
                                     media_type = 'video'
                             
                             if media_type:
+                                # Standardize path using normalized href
                                 media_path = os.path.abspath(os.path.join(folder_path, href))
                                 break 
 
@@ -277,10 +288,22 @@ def parse_folder(conn, folder_path, folder_name):
                     m_path = it[5]
                     m_type = it[6]
                     if m_type in ['video', 'gif', 'voice', 'round_video', 'audio'] and m_path and os.path.exists(m_path):
+                        # 1. Primary: TinyTag (Fastest)
                         try:
                             t = TinyTag.get(m_path)
-                            return int(t.duration) if t.duration else None
-                        except: return None
+                            if t.duration: return max(1, int(round(t.duration)))
+                        except: pass
+                        
+                        # 2. Secondary: OpenCV (Robust fallback for broken/iPhone headers)
+                        if cv2 and m_type in ['video', 'round_video', 'gif']:
+                            try:
+                                cap = cv2.VideoCapture(m_path)
+                                if cap.isOpened():
+                                    fps = cap.get(cv2.CAP_PROP_FPS)
+                                    frames = cap.get(cv2.CAP_PROP_FRAME_COUNT)
+                                    cap.release()
+                                    if fps > 0: return max(1, int(round(frames / fps)))
+                            except: pass
                     return None
                 
                 durations = list(executor.map(get_dur, items))

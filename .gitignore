@@ -2,4 +2,6 @@
 pyrightconfig.json
 static/avatars/
 static/thumbnails/
+scratch/
+__pycache__/
 .vscode

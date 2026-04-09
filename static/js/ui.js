@@ -552,16 +552,17 @@ window.mediaVirtualizer = new MediaVirtualizer();
                                 <img class="media-thumb">
                              </div>`;
                 } else if (type === 'video' || type === 'gif') {
-                    // Use GIF badge or the pre-calculated duration from the database
-                    let badge = type === 'gif' ? 'GIF' : '--:--';
-                    
-                    if (type === 'video' && msg.duration) {
-                        badge = formatTime(msg.duration);
+                    // Conditionally show duration badge (suppress if missing/corrupted)
+                    let badgeHtml = '';
+                    if (type === 'gif') {
+                        badgeHtml = '<div class="media-badge">GIF</div>';
+                    } else if (msg.duration) {
+                        badgeHtml = `<div class="media-badge">${formatTime(msg.duration)}</div>`;
                     }
 
                     html += `<div class="media-grid-item" data-id="${msg.id}" data-type="${type}" data-src="${mediaUrl}" onclick="window.open('${mediaUrl}','_blank')">
                                 <img class="media-thumb">
-                                <div class="media-badge">${badge}</div>
+                                ${badgeHtml}
                              </div>`;
                 } else if (type === 'voice') {
                     const avatarUrl = `/avatar/${encodeURIComponent(msg.sender)}`;

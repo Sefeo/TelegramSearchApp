@@ -8,15 +8,37 @@ import time
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 DB_PATH = os.path.join(BASE_DIR, "chat_history.db")
 
+try:
+    import cv2
+except ImportError:
+    cv2 = None
+
 def get_duration(path):
     if not path or not os.path.exists(path):
         return None
+        
+    # 1. Primary: TinyTag (Fastest)
     try:
-        # TinyTag is efficient as it only reads file headers
         tag = TinyTag.get(path)
-        return int(tag.duration) if tag.duration else None
+        if tag.duration:
+            return max(1, int(round(tag.duration)))
     except:
-        return None
+        pass
+        
+    # 2. Secondary: OpenCV (Robust fallback for broken/iPhone headers)
+    if cv2:
+        try:
+            cap = cv2.VideoCapture(path)
+            if cap.isOpened():
+                fps = cap.get(cv2.CAP_PROP_FPS)
+                frame_count = cap.get(cv2.CAP_PROP_FRAME_COUNT)
+                cap.release()
+                if fps > 0:
+                    return max(1, int(round(frame_count / fps)))
+        except:
+            pass
+            
+    return None
 
 def process_batch(batch):
     results = []
@@ -42,7 +64,7 @@ def main():
         SELECT id, media_path 
         FROM messages 
         WHERE media_type IN ('video', 'gif', 'voice', 'round_video', 'audio') 
-          AND (duration IS NULL OR duration = 0) 
+          AND duration IS NULL 
           AND media_path IS NOT NULL
     """)
     rows = c.fetchall()
