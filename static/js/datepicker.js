@@ -1,8 +1,8 @@
 // datepicker.js — Custom Telegram-style Date Picker
 const DatePicker = (() => {
-    const MONTHS = ['Січень','Лютий','Березень','Квітень','Травень','Червень',
-                    'Липень','Серпень','Вересень','Жовтень','Листопад','Грудень'];
-    const WDAYS  = ['Пн','Вт','Ср','Чт','Пт','Сб','Нд'];
+    const MONTHS = ['Січень', 'Лютий', 'Березень', 'Квітень', 'Травень', 'Червень',
+        'Липень', 'Серпень', 'Вересень', 'Жовтень', 'Листопад', 'Грудень'];
+    const WDAYS = ['Пн', 'Вт', 'Ср', 'Чт', 'Пт', 'Сб', 'Нд'];
 
     let popup = null, view = 'cal';
     let dispY, dispM;           // month currently shown
@@ -14,50 +14,53 @@ const DatePicker = (() => {
     let anchor = null;
     let tipTimer = null, tipEl = null;
     let pendY, pendM;           // month/year picker pending selection
+    let activeDrum = 'm';
+    let myStepper = null;
+    let jumping = false;
     let showClear = false;
 
     /* ─── helpers ─── */
-    function _reposition(){ _pos(); }
+    function _reposition() { _pos(); }
     function pDate(s) {
         if (!s) return null;
-        const p = s.split('-'); return { y:+p[0], m:+p[1], d:+(p[2]||1) };
+        const p = s.split('-'); return { y: +p[0], m: +p[1], d: +(p[2] || 1) };
     }
-    function fmt(y,m,d){ return `${y}-${String(m).padStart(2,'0')}-${String(d||1).padStart(2,'0')}`; }
-    function cmpYM(y1,m1,y2,m2){ return y1!==y2 ? y1-y2 : m1-m2; }
-    function canPrev(){ if(!minDate) return true; const mn=pDate(minDate); return cmpYM(dispY,dispM,mn.y,mn.m)>0; }
-    function canNext(){ if(!maxDate) return true; const mx=pDate(maxDate); return cmpYM(dispY,dispM,mx.y,mx.m)<0; }
+    function fmt(y, m, d) { return `${y}-${String(m).padStart(2, '0')}-${String(d || 1).padStart(2, '0')}`; }
+    function cmpYM(y1, m1, y2, m2) { return y1 !== y2 ? y1 - y2 : m1 - m2; }
+    function canPrev() { if (!minDate) return true; const mn = pDate(minDate); return cmpYM(dispY, dispM, mn.y, mn.m) > 0; }
+    function canNext() { if (!maxDate) return true; const mx = pDate(maxDate); return cmpYM(dispY, dispM, mx.y, mx.m) < 0; }
 
-    function clampDisp(){
-        if(minDate){ const mn=pDate(minDate); if(cmpYM(dispY,dispM,mn.y,mn.m)<0){dispY=mn.y;dispM=mn.m;} }
-        if(maxDate){ const mx=pDate(maxDate); if(cmpYM(dispY,dispM,mx.y,mx.m)>0){dispY=mx.y;dispM=mx.m;} }
+    function clampDisp() {
+        if (minDate) { const mn = pDate(minDate); if (cmpYM(dispY, dispM, mn.y, mn.m) < 0) { dispY = mn.y; dispM = mn.m; } }
+        if (maxDate) { const mx = pDate(maxDate); if (cmpYM(dispY, dispM, mx.y, mx.m) > 0) { dispY = mx.y; dispM = mx.m; } }
     }
 
-    function getAutoDate(){
+    function getAutoDate() {
         const chat = document.getElementById('chat');
-        if(!chat) return null;
+        if (!chat) return null;
         const cr = chat.getBoundingClientRect();
-        for(const row of chat.getElementsByClassName('msg-row')){
+        for (const row of chat.getElementsByClassName('msg-row')) {
             const r = row.getBoundingClientRect();
-            if(r.bottom > cr.top && r.top < cr.bottom){
+            if (r.bottom > cr.top && r.top < cr.bottom) {
                 const ts = row.getAttribute('data-timestamp');
-                if(ts) return ts.substring(0,10);
+                if (ts) return ts.substring(0, 10);
             }
         }
         return null;
     }
 
     /* ─── API fetch (cached) ─── */
-    async function fetchMonth(y,m){
-        const key = fmt(y,m);
-        if(cache.has(key)) return cache.get(key);
+    async function fetchMonth(y, m) {
+        const key = fmt(y, m);
+        if (cache.has(key)) return cache.get(key);
         try {
             const res = await fetch(`/api/calendar_data?year=${y}&month=${m}`);
             const data = await res.json();
-            if(data.min_date && !minDate) minDate = data.min_date;
-            if(data.max_date && !maxDate) maxDate = data.max_date;
+            if (data.min_date && !minDate) minDate = data.min_date;
+            if (data.max_date && !maxDate) maxDate = data.max_date;
             cache.set(key, data);
             return data;
-        } catch(e){ return {days:{}}; }
+        } catch (e) { return { days: {} }; }
     }
 
     async function fetchActiveMonths() {
@@ -66,36 +69,36 @@ const DatePicker = (() => {
             const res = await fetch('/api/calendar_summary');
             const data = await res.json();
             activeMonths = data.active_months || [];
-        } catch(e) { activeMonths = []; }
+        } catch (e) { activeMonths = []; }
     }
 
     /* ─── Public open() ─── */
-    async function open(opts){
+    async function open(opts) {
         // 1. Toggle behavior: if already open on same anchor, close and abort
         if (popup && anchor === opts.anchorEl) {
             close();
             return;
         }
         close();
-        anchor      = opts.anchorEl;
+        anchor = opts.anchorEl;
         onConfirmCb = opts.onConfirm || null;
-        confirmLbl  = opts.confirmLabel || 'Підтвердити';
-        showClear   = !!opts.showClear;
-        view        = 'cal';
+        confirmLbl = opts.confirmLabel || 'Підтвердити';
+        showClear = !!opts.showClear;
+        view = 'cal';
 
         // Bootstrap min/max and active months
-        if(!minDate||!maxDate || !activeMonths){
+        if (!minDate || !maxDate || !activeMonths) {
             const now = new Date();
             await Promise.all([
-                fetchMonth(now.getFullYear(), now.getMonth()+1),
+                fetchMonth(now.getFullYear(), now.getMonth() + 1),
                 fetchActiveMonths()
             ]);
         }
 
         // Resolve selected date
         selDate = (opts.value !== undefined) ? opts.value : selDate;
-        if(!selDate) selDate = getAutoDate();
-        if(!selDate){ const t=new Date(); selDate=fmt(t.getFullYear(),t.getMonth()+1,t.getDate()); }
+        if (!selDate) selDate = getAutoDate();
+        if (!selDate) { const t = new Date(); selDate = fmt(t.getFullYear(), t.getMonth() + 1, t.getDate()); }
 
         // Set display month
         const s = pDate(selDate);
@@ -107,92 +110,166 @@ const DatePicker = (() => {
         popup.className = 'dp-popup';
         document.body.appendChild(popup);
         _pos();
-        setTimeout(() => document.addEventListener('mousedown', _outside), 0);
+        setTimeout(() => {
+            document.addEventListener('mousedown', _outside);
+            document.addEventListener('keydown', _onKey);
+        }, 0);
         window.addEventListener('resize', _reposition);
         await _renderCal();
     }
 
-    function close(){
+    function close() {
         document.removeEventListener('mousedown', _outside);
+        document.removeEventListener('keydown', _onKey);
         window.removeEventListener('resize', _reposition);
         _clearTip();
-        if(popup){ 
-            popup.remove(); 
-            popup=null; 
+        if (popup) {
+            popup.remove();
+            popup = null;
+            myStepper = null;
         }
     }
 
-    function getValue(){ return selDate; }
+    function getValue() { return selDate; }
 
     /* ─── positioning ─── */
-    function _pos(){
-        if(!popup||!anchor) return;
-        const r = anchor.getBoundingClientRect(), W=280;
+    function _pos() {
+        if (!popup || !anchor) return;
+        const r = anchor.getBoundingClientRect(), W = 280;
         let left = r.left, top = r.bottom + 8;
-        
+
         // 2. Adjust position so it doesn't obscure floating buttons (btn-round)
         if (anchor.classList.contains('btn-round')) {
             // Anchor is a right-side floating button -> place calendar to its left
             left = r.left - W - 15;
-            top = r.top; 
+            top = r.top;
             // Keep on screen vertically
-            if(top+360 > window.innerHeight-10) top = window.innerHeight - 360 - 10;
+            if (top + 360 > window.innerHeight - 10) top = window.innerHeight - 360 - 10;
         } else {
             // Default dropdown logic (e.g., from Search Sidebar inputs)
-            if(left+W > window.innerWidth-10) left = window.innerWidth-W-10;
-            if(top+360 > window.innerHeight-10) top = r.top - 360 - 8;
+            if (left + W > window.innerWidth - 10) left = window.innerWidth - W - 10;
+            if (top + 360 > window.innerHeight - 10) top = r.top - 360 - 8;
         }
 
-        if(top < 10) top = 10;
-        if(left < 10) left = 10;
-        Object.assign(popup.style,{position:'fixed',left:left+'px',top:top+'px',width:W+'px',zIndex:'10001'});
+        if (top < 10) top = 10;
+        if (left < 10) left = 10;
+        Object.assign(popup.style, { position: 'fixed', left: left + 'px', top: top + 'px', width: W + 'px', zIndex: '10001' });
     }
 
-    function _outside(e){ if(popup && !popup.contains(e.target) && !anchor?.contains(e.target)) close(); }
+    function _outside(e) { if (popup && !popup.contains(e.target) && !anchor?.contains(e.target)) close(); }
+
+    function _onKey(e) {
+        if (!popup) return;
+        if (e.key === 'Escape') { close(); }
+        else if (e.key === 'Enter') {
+            if (view === 'cal') {
+                if (selDate && onConfirmCb) onConfirmCb(selDate);
+                close();
+            } else if (view === 'my') {
+                _confirmMY();
+            }
+        } else if (view === 'cal' && ['ArrowLeft', 'ArrowRight', 'ArrowUp', 'ArrowDown'].includes(e.key)) {
+            e.preventDefault();
+            const steps = { ArrowLeft: -1, ArrowRight: 1, ArrowUp: -7, ArrowDown: 7 };
+            _moveJump(steps[e.key]);
+        } else if (view === 'my' && ['ArrowLeft', 'ArrowRight', 'ArrowUp', 'ArrowDown'].includes(e.key)) {
+            e.preventDefault();
+            const dir = (e.key === 'ArrowRight' || e.key === 'ArrowDown') ? 1 : -1;
+            if (myStepper) myStepper(dir, activeDrum === 'y');
+        }
+    }
+
+    async function _moveJump(step) {
+        if (!selDate || !popup || jumping) return;
+        jumping = true;
+        try {
+            let s = pDate(selDate);
+            let dir = step > 0 ? 1 : -1;
+
+            // 1. Try current month
+            const data = await fetchMonth(s.y, s.m);
+            const days = data.days || {};
+            const dInM = new Date(s.y, s.m, 0).getDate();
+            let startD = s.d + step;
+
+            for (let d = startD; dir > 0 ? d <= dInM : d >= 1; d += dir) {
+                if (parseInt(days[String(d)] || 0) > 0) {
+                    selDate = fmt(s.y, s.m, d);
+                    dispY = s.y; dispM = s.m;
+                    await _renderCal();
+                    return;
+                }
+            }
+
+            // 2. Try adjacent active months
+            if (!activeMonths) await fetchActiveMonths();
+            const curYM = fmt(s.y, s.m).substring(0, 7);
+            const sorted = [...activeMonths].sort();
+            const adjacentYM = (dir > 0)
+                ? sorted.find(ym => ym > curYM)
+                : sorted.reverse().find(ym => ym < curYM);
+
+            if (adjacentYM) {
+                const [ny, nm] = adjacentYM.split('-').map(Number);
+                const nData = await fetchMonth(ny, nm);
+                const nDays = nData.days || {};
+                const candidates = Object.keys(nDays).map(Number).filter(d => nDays[d] > 0).sort((a, b) => a - b);
+                if (candidates.length > 0) {
+                    const targetD = (dir > 0) ? candidates[0] : candidates[candidates.length - 1];
+                    selDate = fmt(ny, nm, targetD);
+                    dispY = ny; dispM = nm;
+                    await _renderCal();
+                    return;
+                }
+            }
+        } finally {
+            jumping = false;
+        }
+    }
 
     /* ─── Calendar view ─── */
-    async function _renderCal(){
-        if(!popup) return;
+    async function _renderCal() {
+        if (!popup) return;
         const data = await fetchMonth(dispY, dispM);
         const days = data.days || {};
 
-        const dInM    = new Date(dispY, dispM, 0).getDate();
-        const firstDow= (new Date(dispY, dispM-1, 1).getDay()+6)%7; // Mon=0
-        const prevDays= new Date(dispY, dispM-1, 0).getDate();
-        const todayStr= new Date().toISOString().split('T')[0];
+        const dInM = new Date(dispY, dispM, 0).getDate();
+        const firstDow = (new Date(dispY, dispM - 1, 1).getDay() + 6) % 7; // Mon=0
+        const prevDays = new Date(dispY, dispM - 1, 0).getDate();
+        const todayStr = new Date().toISOString().split('T')[0];
         const mn = pDate(minDate), mx = pDate(maxDate);
         const prevOk = canPrev(), nextOk = canNext();
 
         let cells = '';
         // Prev overflow
-        for(let i=firstDow-1; i>=0; i--)
-            cells += `<div class="dp-cell dp-other">${prevDays-i}</div>`;
+        for (let i = firstDow - 1; i >= 0; i--)
+            cells += `<div class="dp-cell dp-other">${prevDays - i}</div>`;
         // Current month
-        for(let d=1; d<=dInM; d++){
-            const ds = fmt(dispY,dispM,d);
-            const cnt = parseInt(days[String(d)]||0);
-            const minDs = mn ? fmt(mn.y,mn.m,mn.d) : '0000-00-00';
-            const maxDs = mx ? fmt(mx.y,mx.m,mx.d) : '9999-99-99';
-            const oob   = ds < minDs || ds > maxDs;
-            const disabled = cnt===0 || oob;
-            let cls = 'dp-cell dp-mday' + (disabled?' dp-dis':' dp-act') +
-                      (ds===todayStr&&!disabled?' dp-today':'') +
-                      (ds===selDate?' dp-sel':'');
+        for (let d = 1; d <= dInM; d++) {
+            const ds = fmt(dispY, dispM, d);
+            const cnt = parseInt(days[String(d)] || 0);
+            const minDs = mn ? fmt(mn.y, mn.m, mn.d) : '0000-00-00';
+            const maxDs = mx ? fmt(mx.y, mx.m, mx.d) : '9999-99-99';
+            const oob = ds < minDs || ds > maxDs;
+            const disabled = cnt === 0 || oob;
+            let cls = 'dp-cell dp-mday' + (disabled ? ' dp-dis' : ' dp-act') +
+                (ds === todayStr && !disabled ? ' dp-today' : '') +
+                (ds === selDate ? ' dp-sel' : '');
             const attrs = !disabled ? `data-date="${ds}" data-cnt="${cnt}"` : '';
             cells += `<div class="${cls}" ${attrs}>${d}</div>`;
         }
         // Next overflow — fill to 42 cells
         const filled = firstDow + dInM;
-        const tail   = (42 - filled);
-        for(let i=1; i<=tail; i++) cells += `<div class="dp-cell dp-other">${i}</div>`;
+        const tail = (42 - filled);
+        for (let i = 1; i <= tail; i++) cells += `<div class="dp-cell dp-other">${i}</div>`;
 
         popup.innerHTML = `
           <div class="dp-header">
-            <button class="dp-nav ${!prevOk?'dp-nav-dis':''}" id="dp-prev">&#8679;</button>
-            <button class="dp-title" id="dp-title"><span class="dp-title-tri">&#9658;</span> ${MONTHS[dispM-1]} ${dispY}</button>
-            <button class="dp-nav ${!nextOk?'dp-nav-dis':''}" id="dp-next">&#8681;</button>
+            <button class="dp-nav ${!prevOk ? 'dp-nav-dis' : ''}" id="dp-prev">&#8679;</button>
+            <button class="dp-title" id="dp-title"><span class="dp-title-tri">&#9658;</span> ${MONTHS[dispM - 1]} ${dispY}</button>
+            <button class="dp-nav ${!nextOk ? 'dp-nav-dis' : ''}" id="dp-next">&#8681;</button>
           </div>
-          <div class="dp-wdays">${WDAYS.map(w=>`<div class="dp-wday">${w}</div>`).join('')}</div>
+          <div class="dp-wdays">${WDAYS.map(w => `<div class="dp-wday">${w}</div>`).join('')}</div>
           <div class="dp-grid" id="dp-grid">${cells}</div>
           <div class="dp-footer">
             ${showClear ? '<button class="dp-fbtn dp-fcancel" id="dp-clear">Очистити</button>' : ''}
@@ -200,70 +277,83 @@ const DatePicker = (() => {
             <button class="dp-fbtn dp-fconfirm" id="dp-confirm">${confirmLbl}</button>
           </div>`;
 
-        popup.querySelector('#dp-prev')?.addEventListener('click', async ()=>{
-            if(!prevOk) return;
-            dispM--; if(dispM<1){dispM=12;dispY--;} await _renderCal();
+        popup.querySelector('#dp-prev')?.addEventListener('click', async () => {
+            if (!prevOk) return;
+            dispM--; if (dispM < 1) { dispM = 12; dispY--; } await _renderCal();
         });
-        popup.querySelector('#dp-next')?.addEventListener('click', async ()=>{
-            if(!nextOk) return;
-            dispM++; if(dispM>12){dispM=1;dispY++;} await _renderCal();
+        popup.querySelector('#dp-next')?.addEventListener('click', async () => {
+            if (!nextOk) return;
+            dispM++; if (dispM > 12) { dispM = 1; dispY++; } await _renderCal();
         });
         popup.querySelector('#dp-title')?.addEventListener('click', _renderMY);
-        popup.querySelector('#dp-clear')?.addEventListener('click', ()=>{
-            if(onConfirmCb) onConfirmCb(null);
+        popup.querySelector('#dp-clear')?.addEventListener('click', () => {
+            if (onConfirmCb) onConfirmCb(null);
             close();
         });
         popup.querySelector('#dp-cancel')?.addEventListener('click', close);
-        popup.querySelector('#dp-confirm')?.addEventListener('click', ()=>{
-            if(selDate && onConfirmCb) onConfirmCb(selDate);
+        popup.querySelector('#dp-confirm')?.addEventListener('click', () => {
+            if (selDate && onConfirmCb) onConfirmCb(selDate);
             close();
         });
 
         // Day interactions via delegation
         const grid = popup.querySelector('#dp-grid');
-        grid?.addEventListener('click', e=>{
+        grid?.addEventListener('click', e => {
             const c = e.target.closest('.dp-act[data-date]');
-            if(!c) return;
+            if (!c) return;
             selDate = c.getAttribute('data-date');
-            grid.querySelectorAll('.dp-sel').forEach(el=>el.classList.remove('dp-sel'));
+            grid.querySelectorAll('.dp-sel').forEach(el => el.classList.remove('dp-sel'));
             c.classList.add('dp-sel');
         });
-        grid?.addEventListener('mouseover', e=>{
+        grid?.addEventListener('mouseover', e => {
             const c = e.target.closest('.dp-act[data-cnt]');
-            if(!c){ _clearTip(); return; }
+            if (!c) { _clearTip(); return; }
             _clearTip();
-            tipTimer = setTimeout(()=>_showTip(c, c.getAttribute('data-cnt')+' повідомлень'), 1000);
+            tipTimer = setTimeout(() => _showTip(c, c.getAttribute('data-cnt') + ' повідомлень'), 500);
         });
-        grid?.addEventListener('mouseout', e=>{
-            if(!e.relatedTarget?.closest?.('.dp-act[data-cnt]')) _clearTip();
+        grid?.addEventListener('mouseout', e => {
+            if (!e.relatedTarget?.closest?.('.dp-act[data-cnt]')) _clearTip();
         });
+
+        // Wheel navigation (conditional)
+        let wheelAcc = 0;
+        grid?.addEventListener('wheel', e => {
+            const enabled = localStorage.getItem('calScroll') !== 'false';
+            if (!enabled || view !== 'cal' || myStepper) return;
+            e.preventDefault();
+            wheelAcc += e.deltaY;
+            if (Math.abs(wheelAcc) >= 100) {
+                _moveJump(wheelAcc > 0 ? 1 : -1);
+                wheelAcc = 0;
+            }
+        }, { passive: false });
     }
 
     /* ─── Month/Year picker ─── */
-    function _renderMY(){
-        if(!popup) return;
+    function _renderMY() {
+        if (!popup) return;
         view = 'my';
         pendY = dispY; pendM = dispM;
         const mn = pDate(minDate), mx = pDate(maxDate);
         const minY = mn?.y || 2010, maxY = mx?.y || new Date().getFullYear();
 
-        function mValid(m){ return !(mn&&pendY===mn.y&&m<mn.m) && !(mx&&pendY===mx.y&&m>mx.m); }
+        function mValid(m) { return !(mn && pendY === mn.y && m < mn.m) && !(mx && pendY === mx.y && m > mx.m); }
         function hasMsg(y, m) { return activeMonths ? activeMonths.includes(fmt(y, m).substring(0, 7)) : true; }
         function hasYearMsg(y) { return activeMonths ? activeMonths.some(am => am.startsWith(y.toString())) : true; }
 
-        function mHTML(){ 
-            return MONTHS.map((n,i)=>{ 
-                const m=i+1, v=mValid(m), s=m===pendM, empty=!hasMsg(pendY, m);
-                return `<div class="dp-prow${s?' dp-psel':''}${!v?' dp-pdis':''}${empty&&v?' dp-pempty':''}" data-month="${m}">${n}</div>`; 
-            }).join(''); 
+        function mHTML() {
+            return MONTHS.map((n, i) => {
+                const m = i + 1, v = mValid(m), s = m === pendM, empty = !hasMsg(pendY, m);
+                return `<div class="dp-prow${s ? ' dp-psel' : ''}${!v ? ' dp-pdis' : ''}${empty && v ? ' dp-pempty' : ''}" data-month="${m}">${n}</div>`;
+            }).join('');
         }
-        function yHTML(){ 
-            let h=''; 
-            for(let y=minY;y<=maxY;y++) {
-                const s=y===pendY, empty=!hasYearMsg(y);
-                h+=`<div class="dp-prow${s?' dp-psel':''}${empty?' dp-pempty':''}" data-year="${y}">${y}</div>`; 
+        function yHTML() {
+            let h = '';
+            for (let y = minY; y <= maxY; y++) {
+                const s = y === pendY, empty = !hasYearMsg(y);
+                h += `<div class="dp-prow${s ? ' dp-psel' : ''}${empty ? ' dp-pempty' : ''}" data-year="${y}">${y}</div>`;
             }
-            return h; 
+            return h;
         }
 
         popup.innerHTML = `
@@ -284,104 +374,105 @@ const DatePicker = (() => {
         const yCol = popup.querySelector('#dp-ycol');
 
         // Scroll to center initially
-        requestAnimationFrame(()=>{
-            popup.querySelector('#dp-mscroll .dp-psel')?.scrollIntoView({block:'center',behavior:'instant'});
-            popup.querySelector('#dp-yscroll .dp-psel')?.scrollIntoView({block:'center',behavior:'instant'});
+        requestAnimationFrame(() => {
+            popup.querySelector('#dp-mscroll .dp-psel')?.scrollIntoView({ block: 'center', behavior: 'instant' });
+            popup.querySelector('#dp-yscroll .dp-psel')?.scrollIntoView({ block: 'center', behavior: 'instant' });
         });
 
-        // Strictly handle mouse wheel events to step item-by-item smoothly
+        // Common step logic for wheel and keyboard
         let wheelScrollTimer = null;
-        function handleWheel(e, colSelector, isYear) {
-            e.preventDefault();
+        function doStep(dir, isYear) {
+            const colSelector = isYear ? '#dp-ycol' : '#dp-mcol';
             const col = popup.querySelector(colSelector);
+            if (!col) return;
             const items = Array.from(col.querySelectorAll('.dp-prow:not(.dp-pdis)'));
             const current = col.querySelector('.dp-psel') || items[0];
             let idx = items.indexOf(current);
-            if(idx !== -1) {
-                // Determine direction based on scroll delta
-                const dir = e.deltaY > 0 ? 1 : -1;
-                const newIdx = Math.max(0, Math.min(items.length - 1, idx + dir));
-                const target = items[newIdx];
-                
-                // Immediately update selection visually and initiate scroll animation
-                col.querySelectorAll('.dp-psel').forEach(el => el.classList.remove('dp-psel'));
-                target.classList.add('dp-psel');
-                target.scrollIntoView({block: 'center', behavior: 'smooth'});
-                
-                // Update internal state
-                if(isYear) {
-                    pendY = +target.getAttribute('data-year');
-                    if(mn&&pendY===mn.y&&pendM<mn.m) pendM=mn.m;
-                    if(mx&&pendY===mx.y&&pendM>mx.m) pendM=mx.m;
-                } else {
-                    pendM = +target.getAttribute('data-month');
-                }
-                
-                // Debounce only the heavy DOM re-rendering to keep the UI thread fully dedicated to the scroll animation
-                if(isYear) {
-                    clearTimeout(wheelScrollTimer);
-                    wheelScrollTimer = setTimeout(() => {
-                        popup.querySelector('#dp-mscroll').innerHTML = mHTML();
-                        requestAnimationFrame(() => popup.querySelector('#dp-mscroll .dp-psel')?.scrollIntoView({block:'center',behavior:'instant'}));
-                    }, 150);
-                }
+            if (idx === -1) return;
+
+            const newIdx = Math.max(0, Math.min(items.length - 1, idx + dir));
+            const target = items[newIdx];
+
+            col.querySelectorAll('.dp-psel').forEach(el => el.classList.remove('dp-psel'));
+            target.classList.add('dp-psel');
+            target.scrollIntoView({ block: 'center', behavior: 'smooth' });
+
+            if (isYear) {
+                pendY = +target.getAttribute('data-year');
+                if (mn && pendY === mn.y && pendM < mn.m) pendM = mn.m;
+                if (mx && pendY === mx.y && pendM > mx.m) pendM = mx.m;
+                clearTimeout(wheelScrollTimer);
+                wheelScrollTimer = setTimeout(() => {
+                    popup.querySelector('#dp-mscroll').innerHTML = mHTML();
+                    requestAnimationFrame(() => popup.querySelector('#dp-mscroll .dp-psel')?.scrollIntoView({ block: 'center', behavior: 'instant' }));
+                }, 150);
+            } else {
+                pendM = +target.getAttribute('data-month');
             }
         }
+        myStepper = doStep;
 
-        mCol?.addEventListener('wheel', e => handleWheel(e, '#dp-mcol', false), {passive: false});
-        yCol?.addEventListener('wheel', e => handleWheel(e, '#dp-ycol', true), {passive: false});
+        mCol?.addEventListener('wheel', e => { e.preventDefault(); activeDrum = 'm'; doStep(e.deltaY > 0 ? 1 : -1, false); }, { passive: false });
+        yCol?.addEventListener('wheel', e => { e.preventDefault(); activeDrum = 'y'; doStep(e.deltaY > 0 ? 1 : -1, true); }, { passive: false });
+
+        mCol?.addEventListener('mouseenter', () => activeDrum = 'm');
+        yCol?.addEventListener('mouseenter', () => activeDrum = 'y');
 
         // Smooth scroll if clicked
         mCol?.addEventListener('click', e => {
             const r = e.target.closest('.dp-prow:not(.dp-pdis)');
-            if(r) {
+            if (r) {
+                activeDrum = 'm';
                 mCol.querySelectorAll('.dp-psel').forEach(el => el.classList.remove('dp-psel'));
                 r.classList.add('dp-psel');
                 pendM = +r.getAttribute('data-month');
-                r.scrollIntoView({block:'center', behavior:'smooth'});
+                r.scrollIntoView({ block: 'center', behavior: 'smooth' });
             }
         });
         yCol?.addEventListener('click', e => {
             const r = e.target.closest('.dp-prow:not(.dp-pdis)');
-            if(r) {
+            if (r) {
+                activeDrum = 'y';
                 yCol.querySelectorAll('.dp-psel').forEach(el => el.classList.remove('dp-psel'));
                 r.classList.add('dp-psel');
                 pendY = +r.getAttribute('data-year');
-                if(mn&&pendY===mn.y&&pendM<mn.m) pendM=mn.m;
-                if(mx&&pendY===mx.y&&pendM>mx.m) pendM=mx.m;
+                if (mn && pendY === mn.y && pendM < mn.m) pendM = mn.m;
+                if (mx && pendY === mx.y && pendM > mx.m) pendM = mx.m;
                 popup.querySelector('#dp-mscroll').innerHTML = mHTML();
-                requestAnimationFrame(() => popup.querySelector('#dp-mscroll .dp-psel')?.scrollIntoView({block:'center',behavior:'instant'}));
-                r.scrollIntoView({block:'center', behavior:'smooth'});
+                requestAnimationFrame(() => popup.querySelector('#dp-mscroll .dp-psel')?.scrollIntoView({ block: 'center', behavior: 'instant' }));
+                r.scrollIntoView({ block: 'center', behavior: 'smooth' });
             }
         });
 
-        popup.querySelector('#dp-my-cancel')?.addEventListener('click', async()=>{ view='cal'; await _renderCal(); });
-        popup.querySelector('#dp-my-ok')?.addEventListener('click', async()=>{
-            dispY=pendY; dispM=pendM; 
-            // Auto-select first available day
-            const dData = await fetchMonth(dispY, dispM);
-            const rDays = dData.days || {};
-            for(let d=1; d<=31; d++){
-                if(rDays[String(d)] > 0){
-                    selDate = fmt(dispY, dispM, d);
-                    break;
-                }
+        popup.querySelector('#dp-my-cancel')?.addEventListener('click', async () => { view = 'cal'; await _renderCal(); });
+        popup.querySelector('#dp-my-ok')?.addEventListener('click', _confirmMY);
+    }
+
+    async function _confirmMY() {
+        dispY = pendY; dispM = pendM;
+        // Auto-select first available day
+        const dData = await fetchMonth(dispY, dispM);
+        const rDays = dData.days || {};
+        for (let d = 1; d <= 31; d++) {
+            if (rDays[String(d)] > 0) {
+                selDate = fmt(dispY, dispM, d);
+                break;
             }
-            view='cal'; await _renderCal();
-        });
+        }
+        view = 'cal'; await _renderCal();
     }
 
     /* ─── Tooltip ─── */
-    function _showTip(el, text){
-        if(tipEl) tipEl.remove();
+    function _showTip(el, text) {
+        if (tipEl) tipEl.remove();
         tipEl = document.createElement('div');
         tipEl.className = 'dp-tip';
         tipEl.textContent = text;
         document.body.appendChild(tipEl);
         const r = el.getBoundingClientRect();
-        tipEl.style.cssText = `position:fixed;left:${r.left+r.width/2}px;top:${r.top-4}px;transform:translate(-50%,-100%);`;
+        tipEl.style.cssText = `position:fixed;left:${r.left + r.width / 2}px;top:${r.top - 4}px;transform:translate(-50%,-100%);`;
     }
-    function _clearTip(){ clearTimeout(tipTimer); tipTimer=null; if(tipEl){tipEl.remove();tipEl=null;} }
+    function _clearTip() { clearTimeout(tipTimer); tipTimer = null; if (tipEl) { tipEl.remove(); tipEl = null; } }
 
     return { open, close, getValue, reposition: _reposition };
 })();

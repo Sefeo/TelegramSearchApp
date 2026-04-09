@@ -114,6 +114,10 @@
         const transcribeSetting = document.getElementById('setting-auto-transcribe');
         transcribeSetting.checked = autoTranscribe;
         
+        const calScrollSetting = document.getElementById('setting-cal-scroll');
+        const calScroll = localStorage.getItem('calScroll') !== 'false'; // Default true
+        calScrollSetting.checked = calScroll;
+
         // Listen for checkbox changes
         transcribeSetting.addEventListener('change', (e) => {
             if (e.target.checked && !whisperReady) {
@@ -123,6 +127,10 @@
             }
             autoTranscribe = e.target.checked;
             localStorage.setItem('autoTranscribe', autoTranscribe);
+        });
+
+        calScrollSetting.addEventListener('change', (e) => {
+            localStorage.setItem('calScroll', e.target.checked);
         });
 
         function initializeWhisper() {
@@ -259,11 +267,18 @@
                 if (type === 'photo') {
                     html += `<div class="media-grid-item" data-id="${msg.id}" onclick="window.open('${mediaUrl}','_blank')"><img src="${mediaUrl}"></div>`;
                 } else if (type === 'video' || type === 'gif') {
-                    // Start with GIF or a placeholder "--:--" for videos
-                    const badge = type === 'gif' ? 'GIF' : '--:--';
-                    
-                    // Tell the browser to read the video duration automatically once loaded
-                    const onLoadAttr = type === 'video' ? `onloadedmetadata="if(this.duration && this.duration !== Infinity) this.nextElementSibling.innerText = formatTime(this.duration);"` : '';
+                    // Use GIF badge or the pre-calculated duration from the database
+                    let badge = type === 'gif' ? 'GIF' : '--:--';
+                    let onLoadAttr = '';
+
+                    if (type === 'video') {
+                        if (msg.duration) {
+                            badge = formatTime(msg.duration);
+                        } else {
+                            // Fallback if duration is missing in DB
+                            onLoadAttr = `onloadedmetadata="if(this.duration && this.duration !== Infinity) this.nextElementSibling.innerText = formatTime(this.duration);"`;
+                        }
+                    }
 
                     html += `<div class="media-grid-item" data-id="${msg.id}" onclick="window.open('${mediaUrl}','_blank')">
                                 <video src="${mediaUrl}#t=0.1" preload="metadata" muted ${onLoadAttr}></video>
