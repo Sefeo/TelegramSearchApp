@@ -74,6 +74,24 @@ def serve_media():
         return send_file(path)
     return "File not found", 404
 
+@app.route('/api/cache_thumbnail', methods=['POST'])
+def cache_thumbnail():
+    msg_id = request.headers.get('X-Message-ID')
+    if not msg_id:
+        return "Missing ID", 400
+    
+    thumb_dir = os.path.join(app.static_folder, 'thumbnails')
+    if not os.path.exists(thumb_dir):
+        os.makedirs(thumb_dir, exist_ok=True)
+        
+    file_path = os.path.join(thumb_dir, f"{msg_id}.jpg")
+    
+    # Save the binary data from the POST body
+    with open(file_path, 'wb') as f:
+        f.write(request.data)
+        
+    return "OK", 200
+
 @app.route('/api/messages', methods=['GET'])
 def get_messages():
     before_id = request.args.get('before_id', type=int)
@@ -458,6 +476,12 @@ def upgrade_db():
         print("[DB] Upgraded database: Added forwarded message columns.")
     except Exception:
         pass # Columns already exist
+
+    try:
+        c.execute("ALTER TABLE messages ADD COLUMN duration INTEGER")
+        print("[DB] Upgraded database: Added 'duration' column.")
+    except Exception:
+        pass # Column already exists
         
     try:
         c.execute("CREATE TABLE IF NOT EXISTS statistics_cache (cache_key TEXT PRIMARY KEY, cache_value TEXT, updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP)")
@@ -467,20 +491,21 @@ def upgrade_db():
         c.execute("CREATE INDEX IF NOT EXISTS idx_messages_sender ON messages(sender)")
         c.execute("CREATE INDEX IF NOT EXISTS idx_messages_media_type ON messages(media_type)")
         c.execute("CREATE INDEX IF NOT EXISTS idx_messages_is_pinned ON messages(is_pinned)")
-        print("[DB] Upgraded database: Ensured performance indexes and cache tables exist.")
         
         # Pre-populate media sizes cache for stickers and GIFs
-        c.execute("SELECT id, media_path FROM messages WHERE media_type IN ('sticker', 'gif') AND media_path IS NOT NULL")
-        media_rows = c.fetchall()
+        # Optimization: Only select paths that ARE NOT already in the cache
+        c.execute("""
+            SELECT media_path FROM messages 
+            WHERE media_type IN ('sticker', 'gif', 'animation') 
+              AND media_path IS NOT NULL 
+              AND media_path NOT IN (SELECT media_path FROM media_sizes_cache)
+        """)
+        uncached_rows = c.fetchall()
         
-        # Check existing cache
-        c.execute("SELECT media_path FROM media_sizes_cache")
-        cached_paths = set(row[0] for row in c.fetchall())
-        
-        inserts = []
-        for msg_id, path_raw in media_rows:
-            path: str = cast(str, path_raw)
-            if path not in cached_paths:
+        if uncached_rows:
+            print(f"[DB] Caching {len(uncached_rows)} new media file sizes for dashboard...")
+            inserts = []
+            for (path,) in uncached_rows:
                 if os.path.exists(path):
                     try:
                         size = os.path.getsize(path)
@@ -488,16 +513,28 @@ def upgrade_db():
                     except:
                         pass
         
-        if inserts:
-            print(f"[DB] Caching {len(inserts)} media file sizes...")
-            c.executemany("INSERT OR IGNORE INTO media_sizes_cache (media_path, size) VALUES (?, ?)", inserts)
-            print("[DB] Media sizing complete.")
+            if inserts:
+                c.executemany("INSERT OR IGNORE INTO media_sizes_cache (media_path, size) VALUES (?, ?)", inserts)
+        
+        print("[DB] Database ready: All performance indexes and cache tables ensured.")
             
     except Exception as e:
-        print(f"[DB] Index/Cache creation error: {e}")
+        print(f"[DB] Index/Cache restoration error: {e}")
         
     conn.commit()
     conn.close()
+
+
+@app.after_request
+def add_header(response):
+    """
+    Add headers to both force latest IE rendering engine or not cache,
+    and also to cache the rendered page for 10 minutes.
+    """
+    response.headers['Cache-Control'] = 'no-store, no-cache, must-revalidate, post-check=0, pre-check=0, max-age=0'
+    response.headers['Pragma'] = 'no-cache'
+    response.headers['Expires'] = '-1'
+    return response
         
 @app.route('/api/missing_waveforms', methods=['GET'])
 def missing_waveforms():

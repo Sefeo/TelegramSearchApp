@@ -1,4 +1,5 @@
 *.db
 pyrightconfig.json
 static/avatars/
+static/thumbnails/
 .vscode

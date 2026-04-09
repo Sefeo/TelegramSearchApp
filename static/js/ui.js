@@ -1,38 +1,310 @@
-		// Sidebar scroll up button logic
+		/**
+ * Integrated Media Virtualizer
+ * Manages resource loading/unloading for the Media Grid.
+ */
+class MediaVirtualizer {
+    constructor() {
+        this.cache = new Map();
+        this.timeouts = new Map();
+        this.observer = null;
+        
+        // Video processing queue
+        this.videoQueue = [];
+        this.activeSnapshots = 0;
+        this.maxConcurrentSnapshots = 2; // Keep low to avoid hardware decoder limit
+        
+        // Video pooling
+        this.videoPool = [];
+        
+        this.setupObserver();
+    }
+
+    setupObserver() {
+        this.observer = new IntersectionObserver((entries) => {
+            entries.forEach(entry => {
+                const el = entry.target;
+                if (entry.isIntersecting) {
+                    this.scheduleLoad(el);
+                } else {
+                    const rect = entry.boundingClientRect;
+                    const vh = window.innerHeight;
+                    // Extreme persistence: Only unload if we are very far away (5000px)
+                    if (rect.top > vh + 5000 || rect.bottom < -5000) {
+                        this.unload(el);
+                    }
+                }
+            });
+        }, { 
+            root: null, 
+            rootMargin: '5000px', // Massive pre-load buffer for "always there" feel
+            threshold: 0
+        });
+    }
+
+    observe(el) {
+        if (!el) return;
+        this.observer.observe(el);
+    }
+
+    scheduleLoad(el) {
+        // No debounce for loading - we want it the microsecond it hits the predictive buffer
+        this.load(el);
+    }
+
+    async load(el) {
+        const id = el.dataset.id;
+        const type = el.dataset.type;
+        const src = el.dataset.src;
+        const thumb = el.querySelector('.media-thumb');
+
+        if (!thumb) return;
+
+        // 1. Check In-Memory Cache (Immediate restore)
+        if (this.cache.has(id)) {
+            if (thumb.src !== this.cache.get(id)) {
+                thumb.src = this.cache.get(id);
+                thumb.classList.add('loaded');
+            }
+            el.classList.remove('loading');
+            return;
+        }
+
+        // 2. Try Server-Side Persistence Cache
+        if (type === 'video' || type === 'gif') {
+            const cachedUrl = `/static/thumbnails/${id}.jpg`;
+            
+            // Check if specifically this session's cache already has it decoded
+            if (this.cache.has(id)) {
+                thumb.classList.add('no-transition');
+                thumb.src = cachedUrl;
+                thumb.classList.add('loaded');
+                el.classList.remove('loading');
+                return;
+            }
+
+            thumb.src = cachedUrl;
+            thumb.onload = () => {
+                thumb.classList.add('loaded');
+                el.classList.remove('loading');
+                this.cache.set(id, cachedUrl);
+            };
+
+            thumb.onerror = () => {
+                this.addToVideoQueue(el, id, src, thumb);
+            };
+        } else {
+            // Photos with Predictive Decoding
+            el.classList.add('loading');
+            await this.handlePhotoLoad(el, id, src, thumb);
+        }
+    }
+
+    addToVideoQueue(el, id, src, thumb) {
+        if (this.cache.has(id) || el.classList.contains('loading')) return;
+        el.classList.add('loading');
+
+        // Reset onerror to avoid infinite loops
+        thumb.onerror = null; 
+
+        this.videoQueue.push({ el, id, src, thumb });
+        this.processVideoQueue();
+    }
+
+    async processVideoQueue() {
+        if (this.activeSnapshots >= this.maxConcurrentSnapshots || this.videoQueue.length === 0) {
+            return;
+        }
+
+        const task = this.videoQueue.shift();
+        this.activeSnapshots++;
+
+        try {
+            await this.handleVideoLoad(task.el, task.id, task.src, task.thumb);
+        } catch (err) {
+            console.error("[Virtualizer] Queue error:", err);
+            task.el.classList.remove('loading');
+            task.el.classList.add('error');
+        } finally {
+            this.activeSnapshots--;
+            this.processVideoQueue();
+        }
+    }
+
+    async handleVideoLoad(el, id, src, thumb) {
+        // Get or create pooled video element
+        let video = this.videoPool.find(v => !v.inUse);
+        if (!video) {
+            video = document.createElement('video');
+            video.className = 'virtual-video';
+            video.muted = true;
+            video.playsInline = true;
+            video.preload = 'metadata';
+            this.videoPool.push(video);
+        }
+        
+        video.inUse = true;
+        video.src = src + '#t=0.1';
+        el.appendChild(video);
+
+        return new Promise((resolve) => {
+            const cleanup = () => {
+                video.inUse = false;
+                video.pause();
+                video.src = '';
+                video.load();
+                if (video.parentNode) video.parentNode.removeChild(video);
+                el.classList.remove('loading');
+                resolve();
+            };
+
+            // Use onseeked instead of onloadeddata for better snapshot accuracy
+            video.onseeked = async () => {
+                try {
+                    // Small delay to ensure the frame is actually drawn on the internal GPU buffer
+                    await new Promise(r => setTimeout(r, 45));
+                    
+                    const blob = await this.captureFrameBlob(video);
+                    const blobUrl = URL.createObjectURL(blob);
+                    this.cache.set(id, blobUrl);
+                    
+                    // Permanent Server Cache: Upload binary to server
+                    this.uploadThumbnail(id, blob);
+                    
+                    thumb.src = blobUrl;
+                    thumb.onload = () => {
+                        thumb.classList.add('loaded');
+                        cleanup();
+                    };
+                } catch (e) {
+                    cleanup();
+                }
+            };
+
+            video.onerror = cleanup;
+
+            // Safety timeout
+            setTimeout(cleanup, 6000);
+        });
+    }
+
+    async uploadThumbnail(id, blob) {
+        try {
+            await fetch('/api/cache_thumbnail', {
+                method: 'POST',
+                body: blob,
+                headers: { 'X-Message-ID': id }
+            });
+        } catch (e) { console.warn("[Virtualizer] Failed to upload thumb:", e); }
+    }
+
+    async captureFrameBlob(video) {
+        return new Promise((resolve, reject) => {
+            if (video.videoWidth === 0) {
+                video.addEventListener('loadedmetadata', () => resolve(this.captureFrameBlob(video)), {once: true});
+                return;
+            }
+            const canvas = document.createElement('canvas');
+            canvas.width = video.videoWidth;
+            canvas.height = video.videoHeight;
+            const ctx = canvas.getContext('2d');
+            ctx.drawImage(video, 0, 0, canvas.width, canvas.height);
+            canvas.toBlob((blob) => {
+                if (blob) resolve(blob);
+                else reject('blob_null');
+            }, 'image/jpeg', 0.85);
+        });
+    }
+
+    async handlePhotoLoad(el, id, src, thumb) {
+        // High-Tier Optimization: Image.decode()
+        // This ensures the pixels are fully decoded in GPU memory BEFORE being assigned to the DOM
+        const img = new Image();
+        img.src = src;
+
+        try {
+            if (this.cache.has(id)) thumb.classList.add('no-transition');
+            
+            await img.decode();
+            thumb.src = src;
+            thumb.classList.add('loaded');
+            el.classList.remove('loading');
+            this.cache.set(id, src);
+        } catch (e) {
+            // Fallback to standard load if decode fails
+            thumb.src = src;
+            thumb.onload = () => {
+                thumb.classList.add('loaded');
+                el.classList.remove('loading');
+                this.cache.set(id, src);
+            };
+        }
+    }
+
+    unload(el) {
+        // Stop any active snapshots in the element
+        el.querySelectorAll('video').forEach(v => {
+            v.pause();
+            v.src = '';
+            v.load();
+            v.remove();
+        });
+
+        // Remove from queue if it hasn't started yet
+        this.videoQueue = this.videoQueue.filter(task => task.el !== el);
+
+        if (this.timeouts.has(el)) {
+            clearTimeout(this.timeouts.get(el));
+            this.timeouts.delete(el);
+        }
+        el.classList.remove('loading');
+    }
+
+    async captureFrame(video) {
+        return new Promise((resolve, reject) => {
+            if (video.videoWidth === 0) {
+                video.addEventListener('loadedmetadata', () => resolve(this.captureFrame(video)), {once: true});
+                return;
+            }
+            const canvas = document.createElement('canvas');
+            canvas.width = video.videoWidth;
+            canvas.height = video.videoHeight;
+            const ctx = canvas.getContext('2d');
+            ctx.drawImage(video, 0, 0, canvas.width, canvas.height);
+            canvas.toBlob((blob) => {
+                if (blob) resolve(URL.createObjectURL(blob));
+                else reject('blob_null');
+            }, 'image/jpeg', 0.82);
+        });
+    }
+
+    reset() {
+        this.cache.forEach(url => { if (url.startsWith('blob:')) URL.revokeObjectURL(url); });
+        this.cache.clear();
+        this.timeouts.forEach(t => clearTimeout(t));
+        this.timeouts.clear();
+        if (this.observer) this.observer.disconnect();
+        this.setupObserver();
+    }
+}
+window.mediaVirtualizer = new MediaVirtualizer();
+
+// Sidebar scroll up button logic
+
         document.getElementById('sidebar-content').addEventListener('scroll', function() {
             document.getElementById('btn-sidebar-up').style.display = this.scrollTop > 100 ? 'flex' : 'none';
         });
 
-        let lastMediaScroll = 0;
+        // Infinite scroll for Media Menu
         document.getElementById('media-content').addEventListener('scroll', function() {
             if (this.scrollHeight - this.scrollTop - this.clientHeight < 800) {
                 if (typeof mediaState !== 'undefined' && !mediaState.isFetching && !mediaState.allLoaded) {
                     loadMedia(mediaState.type, null, true);
                 }
             }
-            
-            if (Math.abs(this.scrollTop - lastMediaScroll) > 400) {
-                lastMediaScroll = this.scrollTop;
-                const items = this.querySelectorAll('.media-grid-item, .media-list-item');
-                const vh = window.innerHeight;
-                items.forEach(item => {
-                    const rect = item.getBoundingClientRect();
-                    if (rect.bottom < -2000 || rect.top > vh + 2000) {
-                        if (!item.dataset.unloaded) {
-                            item.style.height = item.offsetHeight + 'px';
-                            item.dataset.originalHtml = item.innerHTML;
-                            item.innerHTML = '';
-                            item.dataset.unloaded = 'true';
-                        }
-                    } else if (item.dataset.unloaded) {
-                        item.innerHTML = item.dataset.originalHtml;
-                        item.style.height = '';
-                        delete item.dataset.unloaded;
-                        delete item.dataset.originalHtml;
-                    }
-                });
-            }
         });
+
+        // Handled by media_virtualizer.js now
+
 
         // --- CALENDAR & SEARCH LOGIC ---
         // Dynamically reposition calendar when layout shifts
@@ -41,6 +313,16 @@
                 DatePicker.reposition();
             }
         });
+
+        // --- MODULAR MEDIA VIRTUALIZATION ---
+        console.log("[UI] Virtualizer status check:", window.mediaVirtualizer ? "Detected" : "Missing");
+        const lazyVideoObserver = {
+            observe: (el) => { if(window.mediaVirtualizer) window.mediaVirtualizer.observe(el); },
+            reset: () => { if(window.mediaVirtualizer) window.mediaVirtualizer.reset(); }
+        };
+
+
+
 
         function toggleSearch() { 
             const sidebar = document.getElementById('sidebar');
@@ -222,6 +504,7 @@
             if (!append) {
                 // Reset State on new tab click
                 mediaState = { type: type, oldestId: null, isFetching: false, allLoaded: false, currentMonth: "" };
+                if (window.mediaVirtualizer) window.mediaVirtualizer.reset(); // Cleanup previous Blob URLs
                 if (btnElement) {
                     document.querySelectorAll('.media-tab').forEach(btn => btn.classList.remove('active'));
                     btnElement.classList.add('active');
@@ -265,23 +548,19 @@
                 const title = msg.media_path ? msg.media_path.split(/[\\/]/).pop() : "Link";
                 
                 if (type === 'photo') {
-                    html += `<div class="media-grid-item" data-id="${msg.id}" onclick="window.open('${mediaUrl}','_blank')"><img src="${mediaUrl}"></div>`;
+                    html += `<div class="media-grid-item" data-id="${msg.id}" data-type="photo" data-src="${mediaUrl}" onclick="window.open('${mediaUrl}','_blank')">
+                                <img class="media-thumb">
+                             </div>`;
                 } else if (type === 'video' || type === 'gif') {
                     // Use GIF badge or the pre-calculated duration from the database
                     let badge = type === 'gif' ? 'GIF' : '--:--';
-                    let onLoadAttr = '';
-
-                    if (type === 'video') {
-                        if (msg.duration) {
-                            badge = formatTime(msg.duration);
-                        } else {
-                            // Fallback if duration is missing in DB
-                            onLoadAttr = `onloadedmetadata="if(this.duration && this.duration !== Infinity) this.nextElementSibling.innerText = formatTime(this.duration);"`;
-                        }
+                    
+                    if (type === 'video' && msg.duration) {
+                        badge = formatTime(msg.duration);
                     }
 
-                    html += `<div class="media-grid-item" data-id="${msg.id}" onclick="window.open('${mediaUrl}','_blank')">
-                                <video src="${mediaUrl}#t=0.1" preload="metadata" muted ${onLoadAttr}></video>
+                    html += `<div class="media-grid-item" data-id="${msg.id}" data-type="${type}" data-src="${mediaUrl}" onclick="window.open('${mediaUrl}','_blank')">
+                                <img class="media-thumb">
                                 <div class="media-badge">${badge}</div>
                              </div>`;
                 } else if (type === 'voice') {
@@ -323,6 +602,29 @@
             } else {
                 // Append chunk: Add to existing inner container
                 document.getElementById('media-inner').insertAdjacentHTML('beforeend', html);
+            }
+            
+            // Initialize virtualization for new items with a tiny delay to ensure DOM stability
+            console.log(`[UI] Media rendered. Found ${document.getElementById('media-inner').querySelectorAll('.media-grid-item').length} items.`);
+            
+            if (isGrid && window.mediaVirtualizer) {
+                setTimeout(() => {
+                    const inner = document.getElementById('media-inner');
+                    if (!inner) return;
+                    const containers = Array.from(inner.querySelectorAll('.media-grid-item:not(.observed)'));
+                    console.log(`[UI] Applying virtualizer to ${containers.length} new items.`);
+                    
+                    containers.forEach((item, index) => {
+                        item.classList.add('observed');
+                        window.mediaVirtualizer.observe(item);
+                        
+                        // DEEP DEBUG: Force load the first 4 items immediately if they are at the top
+                        if (index < 4 && !append) {
+                            console.log(`[UI] ⚡ Force-loading initial item ${item.dataset.id}`);
+                            window.mediaVirtualizer.load(item);
+                        }
+                    });
+                }, 100);
             }
             
             mediaState.isFetching = false;

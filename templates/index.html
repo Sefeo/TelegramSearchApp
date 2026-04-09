@@ -1,16 +1,21 @@
 <!DOCTYPE html>
 <html lang="en">
+
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <meta http-equiv="Cache-Control" content="no-cache, no-store, must-revalidate">
+    <meta http-equiv="Pragma" content="no-cache">
+    <meta http-equiv="Expires" content="0">
     <title>Telegram Viewer</title>
     <link rel="stylesheet" href="/static/css/style.css">
     <link rel="stylesheet" href="/static/css/pulse.css">
     <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
     <script src="https://html2canvas.hertzen.com/dist/html2canvas.min.js"></script>
 </head>
+
 <body>
-	<!-- Selection Bar -->
+    <!-- Selection Bar -->
     <div id="selection-bar">
         <div><span id="sel-count">1</span> message(s) selected</div>
         <div>
@@ -22,17 +27,24 @@
     <!-- Right-Click Context Menu -->
     <div id="context-menu">
         <div class="menu-item" id="menu-select-msg" onclick="startSelection()">☑ Select</div>
-        <div class="menu-item" id="menu-select-until" onclick="selectUntilHere()" style="display: none;">🔽 Select until this message</div>
-        <div class="menu-item" id="menu-jump-dialogue" onclick="jumpToRightClicked()" style="display: none; border-bottom: 1px solid #3a4b5c;">🎯 See in dialogue</div>
-        <div class="menu-item" id="menu-copy-image" onclick="copyRightClickedImage()" style="display: none;">🖼 Copy image</div>
-        <div class="menu-item" id="menu-open-dest" onclick="openRightClickedDestination()" style="display: none;">📁 Open destination</div>
-        <div class="menu-item" id="menu-copy-link" onclick="copyRightClickedLink()" style="display: none;">🔗 Copy link</div>
+        <div class="menu-item" id="menu-select-until" onclick="selectUntilHere()" style="display: none;">🔽 Select until
+            this message</div>
+        <div class="menu-item" id="menu-jump-dialogue" onclick="jumpToRightClicked()"
+            style="display: none; border-bottom: 1px solid #3a4b5c;">🎯 See in dialogue</div>
+        <div class="menu-item" id="menu-copy-image" onclick="copyRightClickedImage()" style="display: none;">🖼 Copy
+            image</div>
+        <div class="menu-item" id="menu-open-dest" onclick="openRightClickedDestination()" style="display: none;">📁
+            Open destination</div>
+        <div class="menu-item" id="menu-copy-link" onclick="copyRightClickedLink()" style="display: none;">🔗 Copy link
+        </div>
     </div>
 
-	
+
     <!-- Media Menu Sidebar -->
     <div id="media-menu">
-        <div class="sidebar-header"><b style="font-size: 18px;">Shared Media</b><div class="close-btn" onclick="toggleMediaMenu()">✖</div></div>
+        <div class="sidebar-header"><b style="font-size: 18px;">Shared Media</b>
+            <div class="close-btn" onclick="toggleMediaMenu()">✖</div>
+        </div>
         <div class="media-tabs">
             <button class="media-tab active" onclick="loadMedia('photo', this)">Photos</button>
             <button class="media-tab" onclick="loadMedia('video', this)">Videos</button>
@@ -45,24 +57,34 @@
     </div>
 
     <!-- Settings Modal -->
-    <div id="settings-modal" style="display:none; position:fixed; top:50%; left:50%; transform:translate(-50%, -50%); background:#17212b; padding:20px; border-radius:8px; z-index:1000; box-shadow:0 0 20px rgba(0,0,0,0.8); width: 320px; border: 1px solid #000;">
-        <h3 style="margin-top:0; color: white; border-bottom: 1px solid #3a4b5c; padding-bottom: 10px; margin-bottom: 15px;">Settings</h3>
-        
+    <div id="settings-modal"
+        style="display:none; position:fixed; top:50%; left:50%; transform:translate(-50%, -50%); background:#17212b; padding:20px; border-radius:8px; z-index:1000; box-shadow:0 0 20px rgba(0,0,0,0.8); width: 320px; border: 1px solid #000;">
+        <h3
+            style="margin-top:0; color: white; border-bottom: 1px solid #3a4b5c; padding-bottom: 10px; margin-bottom: 15px;">
+            Settings</h3>
+
         <!-- AI Transcription Section -->
-        <div id="ai-transcription-section" style="margin-bottom: 25px; background: rgba(82, 136, 193, 0.1); padding: 12px; border-radius: 8px; border: 1px solid rgba(82, 136, 193, 0.3);">
-            <h4 style="margin: 0 0 10px 0; color: white; display: flex; align-items: center; gap: 8px; font-size: 15px;">
+        <div id="ai-transcription-section"
+            style="margin-bottom: 25px; background: rgba(82, 136, 193, 0.1); padding: 12px; border-radius: 8px; border: 1px solid rgba(82, 136, 193, 0.3);">
+            <h4
+                style="margin: 0 0 10px 0; color: white; display: flex; align-items: center; gap: 8px; font-size: 15px;">
                 🚀 AI Transcription
                 <div class="tooltip" style="font-size: 12px; font-weight: normal;">ⓘ
-                    <span class="tooltip-text" style="width: 250px;">Uses WebGPU and the local Whisper Large V3 Turbo model for high-accuracy transcription. ~400MB one-time download, cached in your browser. Runs entirely offline.</span>
+                    <span class="tooltip-text" style="width: 250px;">Uses WebGPU and the local Whisper Large V3 Turbo
+                        model for high-accuracy transcription. ~400MB one-time download, cached in your browser. Runs
+                        entirely offline.</span>
                 </div>
             </h4>
             <div style="margin-bottom: 10px; font-size: 14px; display: flex; align-items: center; color: #eee;">
-                <input type="checkbox" id="setting-auto-transcribe" style="width: auto; margin-right: 10px; cursor: pointer;">
+                <input type="checkbox" id="setting-auto-transcribe"
+                    style="width: auto; margin-right: 10px; cursor: pointer;">
                 <label for="setting-auto-transcribe" style="cursor: pointer;">Auto-transcribe on copy</label>
             </div>
             <div style="margin-bottom: 12px; font-size: 13px; color: #abb8c4;">
-                <label for="setting-transcribe-lang" style="display: block; margin-bottom: 5px;">Transcription Language:</label>
-                <select id="setting-transcribe-lang" style="width: 100%; background: #0e1621; color: white; border: 1px solid #3a4b5c; border-radius: 6px; padding: 7px 10px; font-size: 13px; cursor: pointer; outline: none;">
+                <label for="setting-transcribe-lang" style="display: block; margin-bottom: 5px;">Transcription
+                    Language:</label>
+                <select id="setting-transcribe-lang"
+                    style="width: 100%; background: #0e1621; color: white; border: 1px solid #3a4b5c; border-radius: 6px; padding: 7px 10px; font-size: 13px; cursor: pointer; outline: none;">
                     <option value="">🌐 Auto-detect (unreliable)</option>
                     <option value="ukrainian">🇺🇦 Ukrainian</option>
                     <option value="russian">🇷🇺 Russian</option>
@@ -77,7 +99,9 @@
                     <option value="japanese">🇯🇵 Japanese</option>
                 </select>
             </div>
-            <button class="search-btn" id="btn-init-whisper" onclick="initializeWhisper()" style="font-size: 13px; background: #5288c1; box-shadow: 0 2px 5px rgba(0,0,0,0.3);">Initialize Whisper Model</button>
+            <button class="search-btn" id="btn-init-whisper" onclick="initializeWhisper()"
+                style="font-size: 13px; background: #5288c1; box-shadow: 0 2px 5px rgba(0,0,0,0.3);">Initialize Whisper
+                Model</button>
         </div>
 
 
@@ -85,7 +109,8 @@
             <input type="checkbox" id="setting-cal-scroll" style="width: auto; margin-right: 10px; cursor: pointer;">
             <label for="setting-cal-scroll" style="cursor: pointer;">Scroll through calendar</label>
             <div class="tooltip">ⓘ
-                <span class="tooltip-text">Allows jumping between available days using the mouse wheel in the calendar view.</span>
+                <span class="tooltip-text">Allows jumping between available days using the mouse wheel in the calendar
+                    view.</span>
             </div>
         </div>
 
@@ -93,16 +118,21 @@
             <input type="checkbox" id="setting-auto-wave" style="width: auto; margin-right: 10px; cursor: pointer;">
             <label for="setting-auto-wave" style="cursor: pointer;">Process real waveforms on play</label>
             <div class="tooltip">ⓘ
-                <span class="tooltip-text">If checked, the browser will analyze the audio to draw an accurate waveform the first time you play a voice message, and save it permanently.</span>
+                <span class="tooltip-text">If checked, the browser will analyze the audio to draw an accurate waveform
+                    the first time you play a voice message, and save it permanently.</span>
             </div>
         </div>
 
-        <button class="search-btn" id="btn-gen-all" onclick="generateAllWaveforms()" style="margin-bottom: 10px; font-size: 13px;">Generate missing waveforms for ALL messages</button>
-		<button class="search-btn" onclick="if(confirm('This will re-analyze ALL 9000+ files. It will take time. Continue?')) generateAllWaveforms(true)" style="margin-bottom: 20px; font-size: 13px; background: #8f4a4e;">Force Regenerate ALL Waveforms</button>
+        <button class="search-btn" id="btn-gen-all" onclick="generateAllWaveforms()"
+            style="margin-bottom: 10px; font-size: 13px;">Generate missing waveforms for ALL messages</button>
+        <button class="search-btn"
+            onclick="if(confirm('This will re-analyze ALL 9000+ files. It will take time. Continue?')) generateAllWaveforms(true)"
+            style="margin-bottom: 20px; font-size: 13px; background: #8f4a4e;">Force Regenerate ALL Waveforms</button>
 
-        <button class="search-btn" onclick="document.getElementById('settings-modal').style.display='none'" style="background:#2f3b4a;">Close</button>
+        <button class="search-btn" onclick="document.getElementById('settings-modal').style.display='none'"
+            style="background:#2f3b4a;">Close</button>
     </div>
-	
+
     <!-- Global Media Player -->
     <div id="global-player">
         <video id="media-engine" style="display: none;"></video>
@@ -113,14 +143,16 @@
             <div class="time-display" id="time-display">0:00 / 0:00</div>
         </div>
         <button class="speed-btn" id="speed-btn" onclick="cycleSpeed()">1x</button>
-		<button class="player-btn" onclick="jumpToPlaying()" title="Show in chat">🎯</button>
+        <button class="player-btn" onclick="jumpToPlaying()" title="Show in chat">🎯</button>
         <button class="player-btn" onclick="closePlayer()">✖</button>
     </div>
 
-    <div class="top-bar"><div class="date-pill" id="date-pill">Loading...</div></div>
+    <div class="top-bar">
+        <div class="date-pill" id="date-pill">Loading...</div>
+    </div>
     <div class="chat-container" id="chat"></div>
-	
-	<!-- Pinned Message Bar -->
+
+    <!-- Pinned Message Bar -->
     <div id="pinned-bar" onclick="jumpToCurrentPinned()">
         <img id="pinned-img" src="" class="pinned-preview" style="display:none;">
         <video id="pinned-vid" src="" class="pinned-preview" style="display:none;" muted></video>
@@ -129,7 +161,7 @@
             <div class="pinned-text" id="pinned-text">Loading...</div>
         </div>
     </div>
-    
+
     <!-- Floating Buttons -->
     <div class="btn-round" id="btn-search" onclick="toggleSearch()" title="Search">🔍</div>
     <div class="btn-round" id="btn-calendar" onclick="openJumpDatePicker(this)" title="Jump to Date">📅</div>
@@ -143,26 +175,31 @@
 
     <!-- Search Sidebar -->
     <div class="sidebar" id="sidebar">
-        <div class="sidebar-header"><b style="font-size: 18px;">Search</b><div class="close-btn" onclick="toggleSearch()">✖</div></div>
-        
+        <div class="sidebar-header"><b style="font-size: 18px;">Search</b>
+            <div class="close-btn" onclick="toggleSearch()">✖</div>
+        </div>
+
         <div class="sidebar-content" id="sidebar-content"> <!-- Added ID here -->
             <input type="text" id="searchInput" placeholder="Search text...">
-            
+
             <label style="font-size: 12px; color: var(--text-muted);">Filter by User(s)</label>
             <div id="sender-list-container" class="sender-list">Loading users...</div>
 
             <label style="font-size: 12px; color: var(--text-muted);">Start Date</label>
-            <button class="dp-trigger" id="btn-start-date" onclick="openSearchDatePicker(this,'start')"><span id="disp-start-date">Not set</span> 📅</button>
+            <button class="dp-trigger" id="btn-start-date" onclick="openSearchDatePicker(this,'start')"><span
+                    id="disp-start-date">Not set</span> 📅</button>
             <input type="hidden" id="start_date">
             <label style="font-size: 12px; color: var(--text-muted);"><br>End Date</label>
-            <button class="dp-trigger" id="btn-end-date" onclick="openSearchDatePicker(this,'end')"><span id="disp-end-date">Not set</span> 📅</button>
+            <button class="dp-trigger" id="btn-end-date" onclick="openSearchDatePicker(this,'end')"><span
+                    id="disp-end-date">Not set</span> 📅</button>
             <input type="hidden" id="end_date">
             <button class="search-btn" onclick="executeSearch()">Find Messages</button>
             <div id="searchResults" style="margin-top: 15px;"></div>
         </div>
 
         <!-- Sidebar Up Button -->
-        <div class="btn-round" id="btn-sidebar-up" onclick="document.getElementById('sidebar-content').scrollTop = 0" title="Scroll to top">⬆</div>
+        <div class="btn-round" id="btn-sidebar-up" onclick="document.getElementById('sidebar-content').scrollTop = 0"
+            title="Scroll to top">⬆</div>
     </div>
 
     <script src="/static/js/globals.js"></script>
@@ -172,7 +209,7 @@
     <script src="/static/js/selection.js"></script>
     <script src="/static/js/render.js"></script>
     <script src="/static/js/chat.js"></script>
-    <script src="/static/js/ui.js"></script>
+    <script src="/static/js/ui.js?v=4"></script>
     <script type="module" src="/static/js/pulse.js?v=6"></script>
     <script src="/static/js/init.js"></script>
 
@@ -186,7 +223,7 @@
                 <button class="pulse-close" onclick="togglePulseDashboard()">✖</button>
             </div>
         </div>
-        
+
         <div class="pulse-senders" id="pulse-senders-container">
             <!-- Avatars dynamically injected here -->
         </div>
@@ -196,113 +233,148 @@
                 <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 15px;">
                     <h3 class="pulse-card-title" style="margin: 0;">Circadian Rhythm 🕒</h3>
                     <div class="cw-view-toggle">
-                        <button id="circ-tab-hourly" class="cw-view-btn active" onclick="switchCircadianTab('hourly')">By Hour</button>
-                        <button id="circ-tab-weekly" class="cw-view-btn" onclick="switchCircadianTab('weekly')">By Day</button>
+                        <button id="circ-tab-hourly" class="cw-view-btn active"
+                            onclick="switchCircadianTab('hourly')">By Hour</button>
+                        <button id="circ-tab-weekly" class="cw-view-btn" onclick="switchCircadianTab('weekly')">By
+                            Day</button>
                     </div>
                 </div>
                 <div id="circ-panel-hourly" class="pulse-chart-container"><canvas id="circadianChart"></canvas></div>
-                <div id="circ-panel-weekly" class="pulse-chart-container" style="display: none;"><canvas id="weeklyChart"></canvas></div>
+                <div id="circ-panel-weekly" class="pulse-chart-container" style="display: none;"><canvas
+                        id="weeklyChart"></canvas></div>
             </div>
-            
+
             <div class="pulse-card pulse-g-wide" id="consistencyCard">
                 <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 10px;">
                     <h3 class="pulse-card-title" style="margin-bottom: 0;">Consistency Grid 📅</h3>
                     <div class="cw-view-toggle" style="display: flex; align-items: center;">
-                        <span id="ps-hover-month" style="display: none; margin-right: 12px; font-size: 12px; font-weight: 500; color: rgba(255,255,255,0.5);"></span>
-                        <button class="cw-view-btn active" data-cgmode="matrix" onclick="switchCgMode('matrix')">📅 Time Matrix</button>
-                        <button class="cw-view-btn" data-cgmode="stream" onclick="switchCgMode('stream')">💬 Pulse Stream</button>
+                        <span id="ps-hover-month"
+                            style="display: none; margin-right: 12px; font-size: 12px; font-weight: 500; color: rgba(255,255,255,0.5);"></span>
+                        <button class="cw-view-btn active" data-cgmode="matrix" onclick="switchCgMode('matrix')">📅 Time
+                            Matrix</button>
+                        <button class="cw-view-btn" data-cgmode="stream" onclick="switchCgMode('stream')">💬 Pulse
+                            Stream</button>
                     </div>
                 </div>
                 <div id="cg-time-matrix" style="flex: 1; overflow: auto;"></div>
                 <div id="cg-pulse-stream" class="ps-container" style="display: none;"></div>
                 <div id="cg-tooltip" class="cg-rich-tooltip" style="display: none;"></div>
             </div>
-            
+
             <div class="pulse-card pulse-g-medium">
                 <h3 class="pulse-card-title">Media DNA 🧬</h3>
                 <div class="pulse-chart-container"><canvas id="mediaDnaChart"></canvas></div>
             </div>
-            
+
             <div class="pulse-card pulse-g-wide" id="chatDynamicsCard">
-                <div style="display: flex; justify-content: space-between; align-items: start; border-bottom: 1px solid rgba(255,255,255,0.1); padding-bottom: 10px; margin-bottom: 10px;">
+                <div
+                    style="display: flex; justify-content: space-between; align-items: start; border-bottom: 1px solid rgba(255,255,255,0.1); padding-bottom: 10px; margin-bottom: 10px;">
                     <div>
                         <h3 class="pulse-card-title" style="margin-bottom: 8px;">Chat Dynamics 📊</h3>
                         <div class="pulse-dynamics-tabs" style="display: flex; gap: 5px;">
-                            <button class="pulse-dyn-tab active" data-tab="messages" onclick="switchDynamicsTab('messages')" style="background: var(--pulse-bg); color: var(--pulse-text); border: 1px solid var(--pulse-border); border-radius: 4px; padding: 4px 8px; cursor: pointer;">Messages</button>
-                            <button class="pulse-dyn-tab" data-tab="icebreaker" onclick="switchDynamicsTab('icebreaker')" style="background: transparent; color: var(--pulse-text-muted); border: 1px solid transparent; border-radius: 4px; padding: 4px 8px; cursor: pointer;">Icebreaker</button>
-                            <button class="pulse-dyn-tab" data-tab="ghosting" onclick="switchDynamicsTab('ghosting')" style="background: transparent; color: var(--pulse-text-muted); border: 1px solid transparent; border-radius: 4px; padding: 4px 8px; cursor: pointer;">Ghosting</button>
-                            <button class="pulse-dyn-tab" data-tab="length" onclick="switchDynamicsTab('length')" style="background: transparent; color: var(--pulse-text-muted); border: 1px solid transparent; border-radius: 4px; padding: 4px 8px; cursor: pointer;">Length</button>
-                            <button class="pulse-dyn-tab" data-tab="burst" onclick="switchDynamicsTab('burst')" style="background: transparent; color: var(--pulse-text-muted); border: 1px solid transparent; border-radius: 4px; padding: 4px 8px; cursor: pointer; display: flex; align-items: center; gap: 4px;">
+                            <button class="pulse-dyn-tab active" data-tab="messages"
+                                onclick="switchDynamicsTab('messages')"
+                                style="background: var(--pulse-bg); color: var(--pulse-text); border: 1px solid var(--pulse-border); border-radius: 4px; padding: 4px 8px; cursor: pointer;">Messages</button>
+                            <button class="pulse-dyn-tab" data-tab="icebreaker"
+                                onclick="switchDynamicsTab('icebreaker')"
+                                style="background: transparent; color: var(--pulse-text-muted); border: 1px solid transparent; border-radius: 4px; padding: 4px 8px; cursor: pointer;">Icebreaker</button>
+                            <button class="pulse-dyn-tab" data-tab="ghosting" onclick="switchDynamicsTab('ghosting')"
+                                style="background: transparent; color: var(--pulse-text-muted); border: 1px solid transparent; border-radius: 4px; padding: 4px 8px; cursor: pointer;">Ghosting</button>
+                            <button class="pulse-dyn-tab" data-tab="length" onclick="switchDynamicsTab('length')"
+                                style="background: transparent; color: var(--pulse-text-muted); border: 1px solid transparent; border-radius: 4px; padding: 4px 8px; cursor: pointer;">Length</button>
+                            <button class="pulse-dyn-tab" data-tab="burst" onclick="switchDynamicsTab('burst')"
+                                style="background: transparent; color: var(--pulse-text-muted); border: 1px solid transparent; border-radius: 4px; padding: 4px 8px; cursor: pointer; display: flex; align-items: center; gap: 4px;">
                                 Double-Texter
-                                <span class="pulse-tooltip" style="cursor:help; font-size:10px; background:rgba(255,255,255,0.1); border-radius:50%; width:14px; height:14px; display:inline-flex; align-items:center; justify-content:center;">?
-                                    <div class="pulse-tooltip-text" style="width:200px; white-space:normal; font-weight:normal;">Burst Ratio is the % of messages sent in consecutive sequences (double texts). Click a user to see their breakdown!</div>
+                                <span class="pulse-tooltip"
+                                    style="cursor:help; font-size:10px; background:rgba(255,255,255,0.1); border-radius:50%; width:14px; height:14px; display:inline-flex; align-items:center; justify-content:center;">?
+                                    <div class="pulse-tooltip-text"
+                                        style="width:200px; white-space:normal; font-weight:normal;">Burst Ratio is the
+                                        % of messages sent in consecutive sequences (double texts). Click a user to see
+                                        their breakdown!</div>
                                 </span>
                             </button>
                         </div>
                     </div>
-                    <div style="display: flex; flex-direction: column; gap: 6px; font-size: 11px; color: var(--pulse-text-muted); background: rgba(0,0,0,0.2); padding: 8px 10px; border-radius: 4px; min-width: 160px;">
-                        <div style="display: grid; grid-template-columns: auto 1fr auto; align-items: center; gap: 5px;">
+                    <div
+                        style="display: flex; flex-direction: column; gap: 6px; font-size: 11px; color: var(--pulse-text-muted); background: rgba(0,0,0,0.2); padding: 8px 10px; border-radius: 4px; min-width: 160px;">
+                        <div
+                            style="display: grid; grid-template-columns: auto 1fr auto; align-items: center; gap: 5px;">
                             <span>Icebreaker:</span>
                             <input type="range" id="pulse-ice-gap" min="1" max="12" value="8" style="width: 100%;">
                             <span id="pulse-ice-val" style="width: 24px; text-align: right;">8h</span>
                         </div>
-                        <div style="display: grid; grid-template-columns: auto 1fr auto; align-items: center; gap: 5px;">
+                        <div
+                            style="display: grid; grid-template-columns: auto 1fr auto; align-items: center; gap: 5px;">
                             <span>Ghosting:</span>
                             <input type="range" id="pulse-ghs-gap" min="1" max="12" value="4" style="width: 100%;">
                             <span id="pulse-ghs-val" style="width: 24px; text-align: right;">4h</span>
                         </div>
-                        <button class="pulse-btn" style="padding: 3px 8px; font-size: 10px; width: 100%; margin-top: 2px;" onclick="applyAndFetchDynamics()">Apply &amp; Fetch</button>
+                        <button class="pulse-btn"
+                            style="padding: 3px 8px; font-size: 10px; width: 100%; margin-top: 2px;"
+                            onclick="applyAndFetchDynamics()">Apply &amp; Fetch</button>
                     </div>
                 </div>
 
-                
 
-                
+
+
                 <!-- The actual content containers -->
                 <div id="dyn-content-messages" class="pulse-sender-battle"></div>
-                <div id="dyn-content-icebreaker" style="display: none; height: 100%; min-height: 250px;"><canvas id="icebreakerChart"></canvas></div>
+                <div id="dyn-content-icebreaker" style="display: none; height: 100%; min-height: 250px;"><canvas
+                        id="icebreakerChart"></canvas></div>
                 <div id="dyn-content-ghosting" style="display: none;" class="pulse-sender-battle"></div>
                 <div id="dyn-content-length" style="display: none;" class="pulse-sender-battle"></div>
                 <div id="dyn-content-burst" style="display: none;" class="pulse-sender-battle"></div>
             </div>
-            
+
             <div class="pulse-card pulse-g-tall" id="emojiCard">
                 <h3 class="pulse-card-title">Emoji Fingerprint ✨</h3>
                 <div class="pulse-emoji-list" id="emojiFingerprint"></div>
             </div>
-            
+
             <div class="pulse-card pulse-g-tall" id="wordsCard" style="display: flex; flex-direction: column;">
                 <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 10px;">
                     <h3 class="pulse-card-title" style="margin-bottom: 0;">Signature Words 🔠</h3>
                     <div class="sigwords-tabs">
-                        <button class="sigwords-tab active" data-tab="pct" onclick="switchSigWordsTab('pct')">Percentage</button>
-                        <button class="sigwords-tab" data-tab="custom" onclick="switchSigWordsTab('custom')">Custom</button>
+                        <button class="sigwords-tab active" data-tab="pct"
+                            onclick="switchSigWordsTab('pct')">Percentage</button>
+                        <button class="sigwords-tab" data-tab="custom"
+                            onclick="switchSigWordsTab('custom')">Custom</button>
                     </div>
                 </div>
-                
+
                 <!-- Percentage panel (existing content) -->
                 <div id="sigwords-panel-pct" style="display: flex; flex-direction: column; flex: 1; min-height: 0;">
-                    <div style="display: flex; flex-direction: column; gap: 8px; font-size: 12px; color: var(--pulse-text-muted); background: rgba(0,0,0,0.2); padding: 10px; border-radius: 8px; margin-bottom: 15px;">
+                    <div
+                        style="display: flex; flex-direction: column; gap: 8px; font-size: 12px; color: var(--pulse-text-muted); background: rgba(0,0,0,0.2); padding: 10px; border-radius: 8px; margin-bottom: 15px;">
                         <div style="display: flex; align-items: center; justify-content: space-between; gap: 10px;">
                             <span>Top Percent:</span>
                             <div style="display: flex; align-items: center; flex: 1;">
-                                <input type="range" id="pulse-word-pct" min="1" max="100" value="10" style="width: 100%;">
-                                <span id="pulse-word-pct-val" style="width: 35px; text-align: right; font-weight: bold;">10%</span>
+                                <input type="range" id="pulse-word-pct" min="1" max="100" value="10"
+                                    style="width: 100%;">
+                                <span id="pulse-word-pct-val"
+                                    style="width: 35px; text-align: right; font-weight: bold;">10%</span>
                             </div>
                         </div>
                         <div style="display: flex; align-items: center; justify-content: space-between; gap: 10px;">
                             <span>Phrase Length:</span>
-                            <input type="number" id="pulse-phrase-len" min="1" max="5" value="1" style="width: 60px; background: rgba(255,255,255,0.1); border: 1px solid var(--glass-border); color: white; border-radius: 4px; padding: 2px 5px; outline: none;">
+                            <input type="number" id="pulse-phrase-len" min="1" max="5" value="1"
+                                style="width: 60px; background: rgba(255,255,255,0.1); border: 1px solid var(--glass-border); color: white; border-radius: 4px; padding: 2px 5px; outline: none;">
                         </div>
                         <div style="display: flex; align-items: center; justify-content: space-between; gap: 10px;">
                             <span>Min. Usage:</span>
                             <div style="display: flex; gap: 10px;">
-                                <input type="number" id="pulse-word-min" min="1" value="5" style="width: 50px; background: rgba(255,255,255,0.1); border: 1px solid var(--glass-border); color: white; border-radius: 4px; padding: 2px 5px; outline: none;">
+                                <input type="number" id="pulse-word-min" min="1" value="5"
+                                    style="width: 50px; background: rgba(255,255,255,0.1); border: 1px solid var(--glass-border); color: white; border-radius: 4px; padding: 2px 5px; outline: none;">
                                 <span style="display:flex;align-items:center;">–</span>
-                                <input type="number" id="pulse-word-max" min="1" value="1000" style="width: 50px; background: rgba(255,255,255,0.1); border: 1px solid var(--glass-border); color: white; border-radius: 4px; padding: 2px 5px; outline: none;" title="Max. Usage">
+                                <input type="number" id="pulse-word-max" min="1" value="1000"
+                                    style="width: 50px; background: rgba(255,255,255,0.1); border: 1px solid var(--glass-border); color: white; border-radius: 4px; padding: 2px 5px; outline: none;"
+                                    title="Max. Usage">
                             </div>
                         </div>
-                        <button class="pulse-btn" style="padding: 4px 8px; font-size: 11px; width: 100%; margin-top: 5px;" onclick="recomputeSignatureWords()">Apply Filters</button>
+                        <button class="pulse-btn"
+                            style="padding: 4px 8px; font-size: 11px; width: 100%; margin-top: 5px;"
+                            onclick="recomputeSignatureWords()">Apply Filters</button>
                     </div>
 
                     <div class="pulse-word-cloud" id="signatureWords" style="flex: 1; overflow-y: auto;"></div>
@@ -310,13 +382,17 @@
 
 
                 <!-- Custom panel (new) -->
-                <div id="sigwords-panel-custom" style="display: none; flex-direction: column; flex: 1; min-height: 0; gap: 10px;">
-                    <input type="text" class="cw-input" id="cw-input" placeholder="Type a word or phrase and press Enter...">
+                <div id="sigwords-panel-custom"
+                    style="display: none; flex-direction: column; flex: 1; min-height: 0; gap: 10px;">
+                    <input type="text" class="cw-input" id="cw-input"
+                        placeholder="Type a word or phrase and press Enter...">
                     <div style="display: flex; justify-content: space-between; align-items: flex-start; gap: 10px;">
                         <div class="cw-tags" id="cw-tags"></div>
                         <div class="cw-view-toggle" id="cw-view-toggle">
-                            <button class="cw-view-btn active" data-mode="tug" onclick="switchCwView('tug')">📊 Tug of War</button>
-                            <button class="cw-view-btn" data-mode="matrix" onclick="switchCwView('matrix')">🎛️ Matrix</button>
+                            <button class="cw-view-btn active" data-mode="tug" onclick="switchCwView('tug')">📊 Tug of
+                                War</button>
+                            <button class="cw-view-btn" data-mode="matrix" onclick="switchCwView('matrix')">🎛️
+                                Matrix</button>
                         </div>
                     </div>
                     <div id="cw-viz" style="flex: 1; overflow-y: auto; min-height: 0;">
@@ -324,12 +400,12 @@
                     </div>
                 </div>
             </div>
-            
+
             <div class="pulse-card pulse-g-tall" id="stickerCard">
                 <h3 class="pulse-card-title">Sticker Fingerprint 🖼️</h3>
                 <div class="pulse-emoji-list" id="stickerFingerprint"></div>
             </div>
-            
+
             <div class="pulse-card pulse-g-tall" id="gifCard">
                 <h3 class="pulse-card-title">GIF Fingerprint 🎞️</h3>
                 <div class="pulse-emoji-list" id="gifFingerprint"></div>
@@ -339,42 +415,56 @@
         <!-- Combined Timeline Controls -->
         <div class="pulse-timeline">
             <div class="pulse-timeline-controls" style="display: flex; flex-direction: column; width: 100%;">
-                
+
                 <!-- Time Slider -->
-                <div style="width: 100%; margin-bottom: 20px; position: relative; height: 30px;" id="pulse-dual-slider-container">
-                    <div style="position: absolute; top: -20px; width: 100%; display: flex; justify-content: space-between; font-size: 12px; color: var(--pulse-text-muted);">
+                <div style="width: 100%; margin-bottom: 20px; position: relative; height: 30px;"
+                    id="pulse-dual-slider-container">
+                    <div
+                        style="position: absolute; top: -20px; width: 100%; display: flex; justify-content: space-between; font-size: 12px; color: var(--pulse-text-muted);">
                         <span id="pulse-slider-label-start">Start</span>
                         <span id="pulse-slider-label-end">End</span>
                     </div>
-                    <div style="position: relative; width: 100%; height: 6px; background: rgba(255,255,255,0.1); border-radius: 3px; top: 12px;">
-                        <div id="pulse-slider-range-fill" style="position: absolute; height: 100%; background: #c084fc; border-radius: 3px; left: 0%; width: 100%;"></div>
+                    <div
+                        style="position: relative; width: 100%; height: 6px; background: rgba(255,255,255,0.1); border-radius: 3px; top: 12px;">
+                        <div id="pulse-slider-range-fill"
+                            style="position: absolute; height: 100%; background: #c084fc; border-radius: 3px; left: 0%; width: 100%;">
+                        </div>
                     </div>
                     <!-- Two range inputs stacked securely -->
-                    <input type="range" id="pulse-month-start" min="0" max="100" value="0" style="position: absolute; top: 5px; width: 100%; -webkit-appearance: none; appearance: none; background: transparent; pointer-events: none; z-index: 3;" class="pulse-dual-thumb">
-                    <input type="range" id="pulse-month-end" min="0" max="100" value="100" style="position: absolute; top: 5px; width: 100%; -webkit-appearance: none; appearance: none; background: transparent; pointer-events: none; z-index: 4;" class="pulse-dual-thumb">
+                    <input type="range" id="pulse-month-start" min="0" max="100" value="0"
+                        style="position: absolute; top: 5px; width: 100%; -webkit-appearance: none; appearance: none; background: transparent; pointer-events: none; z-index: 3;"
+                        class="pulse-dual-thumb">
+                    <input type="range" id="pulse-month-end" min="0" max="100" value="100"
+                        style="position: absolute; top: 5px; width: 100%; -webkit-appearance: none; appearance: none; background: transparent; pointer-events: none; z-index: 4;"
+                        class="pulse-dual-thumb">
                 </div>
 
                 <!-- Precise Dates & Buttons -->
                 <div style="display: flex; gap: 15px; align-items: flex-end; width: 100%; flex-wrap: wrap;">
                     <div>
                         <label style="font-size: 12px; color: var(--pulse-text-muted);">Precise Start Date</label><br>
-                        <button class="dp-trigger" id="pulse-start-date-btn" onclick="openPulseDatePicker(this, 'start')" style="margin-bottom: 0; font-size: 12px; padding: 6px 10px; width: auto; min-width: 130px;">
+                        <button class="dp-trigger" id="pulse-start-date-btn"
+                            onclick="openPulseDatePicker(this, 'start')"
+                            style="margin-bottom: 0; font-size: 12px; padding: 6px 10px; width: auto; min-width: 130px;">
                             <span id="pulse-start-date-disp">Not set</span> &#128197;
                         </button>
                         <input type="hidden" id="pulse-start-date">
                     </div>
                     <div>
                         <label style="font-size: 12px; color: var(--pulse-text-muted);">Precise End Date</label><br>
-                        <button class="dp-trigger" id="pulse-end-date-btn" onclick="openPulseDatePicker(this, 'end')" style="margin-bottom: 0; font-size: 12px; padding: 6px 10px; width: auto; min-width: 130px;">
+                        <button class="dp-trigger" id="pulse-end-date-btn" onclick="openPulseDatePicker(this, 'end')"
+                            style="margin-bottom: 0; font-size: 12px; padding: 6px 10px; width: auto; min-width: 130px;">
                             <span id="pulse-end-date-disp">Not set</span> &#128197;
                         </button>
                         <input type="hidden" id="pulse-end-date">
                     </div>
                     <button class="pulse-btn" onclick="applyPulseDateFilter()">Apply Filter</button>
-                    <button class="pulse-btn" style="background: rgba(255,255,255,0.1);" onclick="resetPulseDateFilter()">Reset & Show All Time</button>
+                    <button class="pulse-btn" style="background: rgba(255,255,255,0.1);"
+                        onclick="resetPulseDateFilter()">Reset & Show All Time</button>
                 </div>
             </div>
         </div>
     </div>
 </body>
+
 </html>

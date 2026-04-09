@@ -4,8 +4,16 @@ import re
 import argparse
 from datetime import datetime
 from bs4 import BeautifulSoup, SoupStrainer
+from tinytag import TinyTag
 import json
 import sys
+import concurrent.futures
+import time
+
+try:
+    import cv2
+except ImportError:
+    cv2 = None
 
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 DEFAULT_DB_NAME = os.path.join(BASE_DIR, "chat_history.db")
@@ -28,7 +36,7 @@ def setup_database(db_path):
                   tg_id TEXT, reply_to_tg_id TEXT, reply_to_id INTEGER,
                   forwarded_from TEXT, forwarded_date TEXT,
                   is_pinned INTEGER DEFAULT 0,
-                  waveform TEXT)''')
+                  waveform TEXT, duration INTEGER)''')
     
     # Performance indexes
     c.execute("CREATE INDEX IF NOT EXISTS idx_messages_timestamp ON messages(timestamp)")
@@ -111,7 +119,7 @@ def parse_folder(conn, folder_path, folder_name):
                         try: 
                             last_timestamp = datetime.strptime(match.group(0), "%d.%m.%Y %H:%M:%S").strftime("%Y-%m-%d %H:%M:%S")
                         except: pass
-                msg_date = last_timestamp
+                msg_date = last_timestampEntry = last_timestamp
 
                 # --- 2. Normal Messages ---
                 if 'default' in classes:
@@ -151,6 +159,7 @@ def parse_folder(conn, folder_path, folder_name):
 
                     media_path = None
                     media_type = None
+                    duration = None
 
                     # Media Detection
                     contact = msg.find('div', class_='media_contact')
@@ -219,7 +228,11 @@ def parse_folder(conn, folder_path, folder_name):
                             elif href.startswith('round_video_messages/'): media_type = 'round_video'
                             elif href.startswith('files/'): media_type = 'file'
                             elif href.startswith('video_files/') or is_video_block:
-                                if title_text == "Animation" or href.startswith('animated_stickers/') or href.startswith('animations/'):
+                                # Improved GIF detection: check if "Animation" text is present in the title OR status
+                                status_div = link.find('div', class_='status')
+                                status_text = status_div.text.strip() if status_div else ""
+                                
+                                if "Animation" in title_text or "Animation" in status_text or href.startswith('animated_stickers/') or href.startswith('animations/'):
                                     media_type = 'gif'
                                 else:
                                     media_type = 'video'
@@ -230,7 +243,7 @@ def parse_folder(conn, folder_path, folder_name):
 
                     normal_msgs_batch.append((folder_name, file, current_sender, msg_date, text_content, 
                                               media_path, media_type, tg_id, reply_to_tg_id, 
-                                              forwarded_from, forwarded_date))
+                                              forwarded_from, forwarded_date, duration))
                     total += 1
 
                 # --- 3. System Messages ---
@@ -254,13 +267,40 @@ def parse_folder(conn, folder_path, folder_name):
                             sys_msgs_batch.append((folder_name, file, "System", msg_date, text, 'service', 'Forwarded Information'))
                             total += 1
 
+        # Process batches with parallel duration extraction for speed
+        def fetch_durations(items):
+            # Only process if we have valid media types that support duration
+            with concurrent.futures.ThreadPoolExecutor(max_workers=8) as executor:
+                def get_dur(it):
+                    # it is [..., media_path, media_type, ..., duration]
+                    # duration is at index 11
+                    m_path = it[5]
+                    m_type = it[6]
+                    if m_type in ['video', 'gif', 'voice', 'round_video', 'audio'] and m_path and os.path.exists(m_path):
+                        try:
+                            t = TinyTag.get(m_path)
+                            return int(t.duration) if t.duration else None
+                        except: return None
+                    return None
+                
+                durations = list(executor.map(get_dur, items))
+                # Update items with extracted durations
+                updated = []
+                for i, d in enumerate(durations):
+                    row = list(items[i])
+                    row[11] = d # Update duration index
+                    updated.append(tuple(row))
+                return updated
+
         # Execute batched inserts
         if normal_msgs_batch:
+            # Parallelize duration fetching for the batch
+            normal_msgs_batch = fetch_durations(normal_msgs_batch)
             c.executemany("""INSERT INTO messages 
                              (source_folder, file_name, sender, timestamp, text_content, 
                               media_path, media_type, tg_id, reply_to_tg_id, 
-                              forwarded_from, forwarded_date) 
-                             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""", normal_msgs_batch)
+                              forwarded_from, forwarded_date, duration) 
+                             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""", normal_msgs_batch)
         if sys_msgs_batch:
             c.executemany("""INSERT INTO messages 
                              (source_folder, file_name, sender, timestamp, text_content, media_type, forwarded_from) 
@@ -281,11 +321,81 @@ def parse_folder(conn, folder_path, folder_name):
     conn.commit()
     return total
 
+def generate_thumbnail_worker(task):
+    """Helper for parallel thumbnail generation using OpenCV."""
+    msg_id, media_path, thumb_dir = task
+    if not media_path or not os.path.exists(media_path):
+        return False
+        
+    output_path = os.path.join(thumb_dir, f"{msg_id}.jpg")
+    if os.path.exists(output_path):
+        return True
+
+    try:
+        cap = cv2.VideoCapture(media_path)
+        if not cap.isOpened():
+            return False
+            
+        # Try to seek to 100ms
+        cap.set(cv2.CAP_PROP_POS_MSEC, 100) 
+        success, frame = cap.read()
+        
+        if success:
+            cv2.imwrite(output_path, frame, [int(cv2.IMWRITE_JPEG_QUALITY), 85])
+            cap.release()
+            return True
+        else:
+            # Fallback to first frame
+            cap.set(cv2.CAP_PROP_POS_FRAMES, 0)
+            success, frame = cap.read()
+            if success:
+                cv2.imwrite(output_path, frame, [int(cv2.IMWRITE_JPEG_QUALITY), 85])
+        
+        cap.release()
+        return success
+    except:
+        return False
+
+def generate_thumbnails(db_path):
+    """Orchestrates parallel thumbnail generation."""
+    thumb_dir = os.path.join(os.path.dirname(os.path.abspath(__file__)), "static", "thumbnails")
+    os.makedirs(thumb_dir, exist_ok=True)
+    
+    conn = sqlite3.connect(db_path)
+    c = conn.cursor()
+    c.execute("SELECT id, media_path FROM messages WHERE media_type IN ('video', 'gif', 'round_video') AND media_path IS NOT NULL")
+    rows = c.fetchall()
+    conn.close()
+
+    to_process = [(row[0], row[1], thumb_dir) for row in rows if not os.path.exists(os.path.join(thumb_dir, f"{row[0]}.jpg"))]
+    total = len(to_process)
+    
+    if total == 0:
+        print("\nAll thumbnails are already generated! ✨")
+        return
+
+    print(f"\n[6/6] Generating {total} video thumbnails using {os.cpu_count() or 4} parallel workers...")
+    start_time = time.time()
+    
+    success_count = 0
+    # Use ThreadPoolExecutor for video decoding
+    workers = min(os.cpu_count() or 4, 12)
+    with concurrent.futures.ThreadPoolExecutor(max_workers=workers) as executor:
+        futures = {executor.submit(generate_thumbnail_worker, task): task for task in to_process}
+        for i, future in enumerate(concurrent.futures.as_completed(futures)):
+            if future.result():
+                success_count += 1
+            if (i + 1) % 50 == 0 or (i + 1) == total:
+                print(f"      Progress: {i+1}/{total} ({(i+1)/total*100:.1f}%)")
+
+    print(f"Finished! Generated {success_count} thumbnails in {time.time() - start_time:.2f} seconds.")
+
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="Telegram HTML Export to SQLite Database Builder")
     parser.add_argument("--input", help="Path to the Telegram export folder (contains messages.html)")
     parser.add_argument("--db", default=DEFAULT_DB_NAME, help=f"Custom path for the output database file (default: {DEFAULT_DB_NAME})")
     parser.add_argument("--reset", action="store_true", help="Drop and recreate the database before importing")
+    parser.add_argument("--no-thumbnails", action="store_true", help="Skip generating video thumbnails")
     
     args = parser.parse_args()
     DB_PATH = args.db
@@ -379,7 +489,15 @@ if __name__ == "__main__":
     # 5. Final Summary
     print(f"\nSuccess! Indexed {total_indexed} messages.")
     print(f"Database saved to: {DB_PATH}")
+    
+    # 6. Optional Thumbnail Generation
+    if not args.no_thumbnails and cv2:
+        db_connection.close()  # Close connection to allow multi-threaded reading
+        generate_thumbnails(DB_PATH)
+    elif not cv2 and not args.no_thumbnails:
+        print("\n[!] Note: 'opencv-python' is not installed. To generate fast video previews automatically, run: pip install opencv-python-headless")
+    else:
+        db_connection.close()
+
     print("\n[!] IMPORTANT: Do NOT change the path of linked Telegram exported chats.")
     print("Some functions rely on these paths to extract media files (videos, stickers, voice messages).")
-    
-    db_connection.close()
