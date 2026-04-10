@@ -320,8 +320,37 @@
         .time { font-size: 11px; color: #6d839b; float: right; margin: 6px -4px -4px 10px; }
         
         /* Media Attachments */
-        .media-photo { max-width: 100%; max-height: 300px; border-radius: 8px; display: block; margin-top: 5px; cursor: pointer; }
-        .media-sticker { width: 150px; display: block; margin-top: 5px; }
+.media-wrapper { 
+    position: relative; 
+    display: block; 
+    width: fit-content; 
+    max-width: 100%;
+    margin-top: 5px;
+}
+.media-time-pill {
+    position: absolute;
+    bottom: 8px;
+    right: 8px;
+    background: rgba(0, 0, 0, 0.45);
+    backdrop-filter: blur(4px);
+    -webkit-backdrop-filter: blur(4px);
+    color: white;
+    padding: 2px 8px;
+    border-radius: 12px;
+    font-size: 11px;
+    font-weight: 500;
+    opacity: 0;
+    transition: opacity 0.2s ease;
+    pointer-events: none;
+    z-index: 10;
+}
+.media-wrapper:hover .media-time-pill {
+    opacity: 1;
+}
+
+.media-photo { max-width: 100%; max-height: 300px; border-radius: 8px; display: block; cursor: pointer; }
+.media-gif { max-width: 300px; border-radius: 8px; display: block; pointer-events: none; }
+.media-sticker { width: 150px; display: block; }
         .media-file { display: inline-block; background: #242f3d; padding: 10px; border-radius: 8px; color: white; text-decoration: none; margin-top: 5px; font-size: 14px; border: 1px solid #3a4b5c;}
         .media-file:hover { background: #2b394a; }
         .play-btn-inline { background: var(--accent); color: white; border: none; padding: 8px 15px; border-radius: 20px; cursor: pointer; font-size: 14px; margin-top: 5px; display: flex; align-items: center; gap: 8px;}

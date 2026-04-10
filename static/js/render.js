@@ -199,17 +199,27 @@
                     const isAudioFile = msg.media_type === 'audio' || msg.media_path.toLowerCase().endsWith('.mp3');
 	
 					
-					if (msg.media_type === 'photo') {
+                    if (msg.media_type === 'photo') {
+                        const timePill = `<div class="media-time-pill">${timeStr}</div>`;
                         // If spoiled: First click reveals. Second click opens.
                         if (isSpoilerMedia) {
-                            mediaHtml = `<img class="media-photo spoiler" src="${url}" onclick="if(this.classList.contains('revealed')){ window.open('${url}','_blank') } else { this.classList.add('revealed') }">`;
+                            mediaHtml = `<div class="media-wrapper"><img class="media-photo spoiler" src="${url}" onclick="if(this.classList.contains('revealed')){ window.open('${url}','_blank') } else { this.classList.add('revealed') }">${timePill}</div>`;
                         } else {
-                            mediaHtml = `<img class="media-photo" src="${url}" onclick="window.open('${url}','_blank')">`;
+                            mediaHtml = `<div class="media-wrapper"><img class="media-photo" src="${url}" onclick="window.open('${url}','_blank')">${timePill}</div>`;
                         }
                     }
-                    else if (msg.media_type === 'gif') mediaHtml = `<video src="${url}" autoplay loop muted playsinline class="media-gif ${sCls}" ${isSpoilerMedia ? "onclick=\"this.classList.add('revealed')\"" : ""}></video>`;
-                    else if (msg.media_type === 'sticker') mediaHtml = `<img class="media-sticker" src="${url}">`;
-                    else if (msg.media_type === 'video') mediaHtml = `<video src="${url}" controls class="media-photo ${sCls}"></video>`;
+                    else if (msg.media_type === 'gif') {
+                        const timePill = `<div class="media-time-pill">${timeStr}</div>`;
+                        mediaHtml = `<div class="media-wrapper"><video src="${url}" autoplay loop muted playsinline class="media-gif ${sCls}" ${isSpoilerMedia ? "onclick=\"this.classList.add('revealed')\"" : ""}></video>${timePill}</div>`;
+                    }
+                    else if (msg.media_type === 'sticker') {
+                        const timePill = `<div class="media-time-pill">${timeStr}</div>`;
+                        mediaHtml = `<div class="media-wrapper"><img class="media-sticker" src="${url}">${timePill}</div>`;
+                    }
+                    else if (msg.media_type === 'video') {
+                        const timePill = `<div class="media-time-pill">${timeStr}</div>`;
+                        mediaHtml = `<div class="media-wrapper"><video src="${url}" controls class="media-photo ${sCls}"></video>${timePill}</div>`;
+                    }
                     else if (msg.media_type === 'round_video') {
                         mediaHtml = `<div class="round-video-wrapper" id="rv-wrap-${msg.id}" onclick="playGlobalMedia('${msg.media_path.replace(/\\/g, '\\\\')}', 'round_video', ${msg.id})">
                                         <video id="rv-${msg.id}" src="${url}#t=0.1" preload="metadata" class="round-video-embed" muted></video>
@@ -289,6 +299,7 @@
                 const pinDot = msg.is_pinned ? `<div class="pin-indicator" title="Pinned Message"></div>` : '';
                 
                 // Determine if bubble should be frameless (Stickers/GIFs with no text and no reply)
+                // GIF now uses the hoverable pill in mediaHtml, so we only need 'frameless' class if it's a gif/sticker with no text
                 const isFrameless = (msg.media_type === 'sticker' || msg.media_type === 'gif') && !textToRender && !msg.reply_to_id;
                 const bubbleClass = isFrameless ? "bubble frameless" : "bubble";
 
@@ -301,7 +312,7 @@
                             ${typeof replyHtml !== 'undefined' ? replyHtml : ''}
                             ${fwdHtml}
                             ${mediaHtml}
-                            ${textToRender ? `<div class="text">${textToRender} <span class="time">${timeStr}</span></div>` : (isFrameless ? `<span class="time">${timeStr}</span>` : '')}
+                            ${textToRender ? `<div class="text">${textToRender} <span class="time">${timeStr}</span></div>` : ''}
                         </div>
                     </div>`;
             });
