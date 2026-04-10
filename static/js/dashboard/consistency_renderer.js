@@ -202,6 +202,7 @@ function renderPulseStream(consistency, metrics) {
 function makeCgSquare(dateStr, data, metrics) {
     const sq = document.createElement('div');
     sq.className = 'cg-sq';
+    sq.dataset.date = dateStr;
 
     if (data && data.total > 0) {
         const intensity = data.total / metrics.maxVal;

@@ -109,19 +109,9 @@ export function recomputeSignatureWords() {
     WorkerClient._triggerCompute(['wordsCard']);
 }
 
-export function sharePulseDashboard() {
-    const area = document.getElementById('pulse-dashboard');
-    if (typeof html2canvas === 'function') {
-        html2canvas(area, {
-            backgroundColor: '#0f172a',
-            scale: 2
-        }).then(canvas => {
-            const link = document.createElement('a');
-            link.download = 'ChatPulse_Wrapped.png';
-            link.href = canvas.toDataURL('image/png');
-            link.click();
-        });
-    }
+export async function sharePulseDashboard() {
+    const { showPulseExportModal } = await import('./export_manager.js');
+    showPulseExportModal();
 }
 
 export function openPulseDatePicker(anchor, type) {

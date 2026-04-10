@@ -24,7 +24,7 @@
                 } else { lastSender = null; }
             }
 
-            messages.forEach(msg => {
+            messages.forEach((msg, idx) => {
                 messageDataStore[msg.id] = msg; // Save to store
                 
                 let timeStr = ""; let dateOnly = "";
@@ -62,7 +62,39 @@
                     lastSender = null; 
                 }
 
-                const showHeader = msg.sender !== lastSender;
+                const showName = msg.sender !== lastSender;
+
+                // --- AVATAR LOGIC (LAST MESSAGE IN SEQUENCE) ---
+                const isLastMsgOfBatch = idx === messages.length - 1;
+                let nextSender = null;
+                if (!isLastMsgOfBatch) {
+                    const nextMsg = messages[idx + 1];
+                    const nextDateOnly = nextMsg.timestamp ? nextMsg.timestamp.split(' ')[0] : null;
+                    if (nextDateOnly === dateOnly) nextSender = nextMsg.sender;
+                } else if (prepend) {
+                    const firstRow = chat.querySelector('.msg-row');
+                    if (firstRow && firstRow.dataset.date === dateOnly) nextSender = firstRow.dataset.sender;
+                }
+                const showAvatar = msg.sender !== nextSender;
+
+                // --- BOUNDARY FIXUP FOR APPENDING ---
+                if (!prepend && idx === 0 && lastSender === msg.sender) {
+                    const lastRow = Array.from(chat.children).reverse().find(el => el.classList.contains('msg-row'));
+                    if (lastRow) {
+                        const oldAvatar = lastRow.querySelector('.avatar');
+                        if (oldAvatar) oldAvatar.outerHTML = '<div style="width: 54px;"></div>';
+                    }
+                }
+
+                // --- BOUNDARY FIXUP FOR PREPENDING ---
+                if (prepend && isLastMsgOfBatch && msg.sender === nextSender) {
+                    const firstRow = chat.querySelector('.msg-row');
+                    if (firstRow) {
+                        const existingSenderName = firstRow.querySelector('.sender');
+                        if (existingSenderName) existingSenderName.remove();
+                    }
+                }
+
                 lastSender = msg.sender;
                 const avatarUrl = `/avatar/${encodeURIComponent(msg.sender)}`;
                 
@@ -262,10 +294,10 @@
 
                 html += `
                     <div class="msg-row" id="msg-${msg.id}" data-date="${dateOnly}" data-sender="${msg.sender}" data-timestamp="${msg.timestamp}">
-                        ${showHeader ? `<img class="avatar" src="${avatarUrl}">` : `<div style="width: 54px;"></div>`}
+                        ${showAvatar ? `<img class="avatar" src="${avatarUrl}">` : `<div style="width: 54px;"></div>`}
                         <div class="${bubbleClass}">
                             ${pinDot}
-                            ${showHeader ? `<div class="sender" style="color: ${getColor(msg.sender)};">${msg.sender}</div>` : ''}
+                            ${showName ? `<div class="sender" style="color: ${getColor(msg.sender)};">${msg.sender}</div>` : ''}
                             ${typeof replyHtml !== 'undefined' ? replyHtml : ''}
                             ${fwdHtml}
                             ${mediaHtml}
