@@ -646,19 +646,42 @@ window.mediaVirtualizer = new MediaVirtualizer();
             const res = await fetch(`/api/search?${params}`);
             const data = await res.json();
             
-            if(data.length === 0) { resDiv.innerHTML = "No results."; return; }
+            if (data.error) {
+                resDiv.innerHTML = `<span style="color:var(--status-offline)">Error: ${data.error}</span>`;
+                return;
+            }
+
+            // Handle both new {results: [], terms: []} and old [] formats
+            const results = data.results || (Array.isArray(data) ? data : []);
+            const terms = data.terms || (q ? [q] : []);
             
-            let html = `<div style="color:var(--text-muted); margin-bottom:10px;">Found ${data.length} results:</div>`;
+            if(results.length === 0) { resDiv.innerHTML = "No results."; return; }
+            
+            let html = `<div style="color:var(--text-muted); margin-bottom:10px;">Found ${results.length} results:</div>`;
             const safeQ = q.replace(/'/g, "\\'"); 
 
-            data.forEach(msg => {
+            // 1. Prepare terms for searching and highlighting
+            const sortedTerms = [...new Set(terms)]
+                .filter(t => t.length > 0)
+                .sort((a, b) => b.length - a.length);
+            
+            const termsRegexPattern = sortedTerms.map(t => escapeRegExp(t)).join('|');
+            // Use Unicode-aware word boundaries to prevent matching inside other words
+            const searchRegex = sortedTerms.length > 0 ? new RegExp(`(?<=^|[^\\p{L}\\p{N}])(${termsRegexPattern})(?=[^\\p{L}\\p{N}]|$)`, 'giu') : null;
+
+            // Robust multi-term highlighter
+            function smartHighlight(text) {
+                if (!searchRegex) return text;
+                return text.replace(searchRegex, '<mark>$1</mark>');
+            }
+
+            results.forEach(msg => {
                 // 1. Determine the text label
                 let text = msg.text_content;
-				let isMediaLabel = false;
-				
+                let isMediaLabel = false;
+                
                 if (!text) {
-                    // If no caption, label it by type
-					isMediaLabel = true;
+                    isMediaLabel = true;
                     if (msg.media_type === 'photo') text = "Photo";
                     else if (msg.media_type === 'video') text = "Video";
                     else if (msg.media_type === 'round_video') text = "Video Message";
@@ -666,55 +689,60 @@ window.mediaVirtualizer = new MediaVirtualizer();
                     else if (msg.media_type) text = `${msg.media_type.charAt(0).toUpperCase() + msg.media_type.slice(1)}`;
                     else text = "Message";
                 } else {
-                    // Replace line breaks with spaces before stripping tags
-                    let processedText = text.replace(/<br\s*\/?>/gi, ' ').replace(/\n/g, ' ');
-                    const doc = new DOMParser().parseFromString(processedText, 'text/html');
-                    text = doc.body.textContent || "";
+                    // Faster HTML stripping for snippets
+                    text = text.replace(/<[^>]*>/g, ' ').replace(/&nbsp;/g, ' ').replace(/\s+/g, ' ').trim();
                 }
-				
-				//Smart snippet generation
-				if (q && !isMediaLabel) {
-                    // Find where the match is
-                    const idx = text.toLowerCase().indexOf(q.toLowerCase());
-                    if (idx !== -1) {
-                        const contextChars = 20; // Characters to show before/after
-                        const start = Math.max(0, idx - contextChars);
-                        const end = Math.min(text.length, idx + q.length + contextChars);
+                
+                // 2. Smart snippet generation
+                if (q && !isMediaLabel && searchRegex) {
+                    // Reset regex index for safety
+                    searchRegex.lastIndex = 0;
+                    
+                    // Center the snippet on the FIRST matching term
+                    const match = searchRegex.exec(text);
+                    const firstIdx = match ? match.index : -1;
+                    const matchedTerm = match ? match[0] : "";
+
+                    if (firstIdx !== -1) {
+                        const contextChars = 40; 
+                        const start = Math.max(0, firstIdx - contextChars);
+                        const end = Math.min(text.length, firstIdx + matchedTerm.length + contextChars);
                         
                         let snippet = text.substring(start, end);
-                        
                         if (start > 0) snippet = "..." + snippet;
                         if (end < text.length) snippet = snippet + "...";
-                        
                         text = snippet;
+                    } else if (text.length > 100) {
+                        text = text.substring(0, 100) + "...";
                     }
                 }
 
-                // 2. Highlight keyword
-                if (q) text = text.replace(new RegExp(`(${escapeRegExp(q)})`, "gi"), "<mark>$1</mark>");
-                
-				// Apply Blue Color if it is a Media Label
-                if (isMediaLabel) {
+                // 3. Highlight terms
+                if (!isMediaLabel) {
+                    text = smartHighlight(text);
+                } else {
                     text = `<span class="search-media-label">${text}</span>`;
                 }
-				
-                // 3. Generate Thumbnail HTML (if it's a photo)
+                
+                // 4. Generate Thumbnail HTML
                 let thumbHtml = '';
                 if (msg.media_type === 'photo' && msg.media_path) {
                     const thumbUrl = `/media?path=${encodeURIComponent(msg.media_path)}`;
                     thumbHtml = `<img src="${thumbUrl}" class="search-preview-img">`;
                 }
 
-                // 4. Build the Item HTML
+                // 5. Build the Item HTML
+                // We pass the full terms array to jumpToContext for accurate chat highlighting
+                const termsJson = JSON.stringify(terms).replace(/'/g, "\\'").replace(/"/g, '&quot;');
                 html += `
-                    <div class="search-item" onclick="jumpToContext(${msg.id}, '${safeQ}', this)">
+                    <div class="search-item" onclick="jumpToContext(${msg.id}, ${termsJson}, this)">
                         <div style="display:flex; justify-content:space-between; margin-bottom:4px;">
                             <b style="color: ${getColor(msg.sender)}">${msg.sender}</b>
                             <div class="time">${msg.timestamp.split(' ')[0]}</div>
                         </div>
-                        <div style="display: flex; align-items: center; color: var(--text-muted);">
+                        <div style="display: flex; align-items: center; color: var(--text-muted); gap: 10px;">
                             ${thumbHtml}
-                            <div style="white-space: nowrap; overflow: hidden; text-overflow: ellipsis;">${text}</div>
+                            <div style="flex: 1; min-width: 0; display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; text-overflow: ellipsis; white-space: normal; line-height: 1.4;">${text}</div>
                         </div>
                     </div>`;
             });

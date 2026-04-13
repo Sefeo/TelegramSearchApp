@@ -39,10 +39,9 @@
         }
 
         // --- HELPER: Handles the scrolling, pulsing, and keyword highlighting ---
-        function applyJumpEffects(target, highlightKeyword) {
+        function applyJumpEffects(target, searchTerms) {
             target.scrollIntoView({ behavior: 'smooth', block: 'center' }); 
             
-            // Force animation restart for the dialogue highlight
             const bubble = target.querySelector('.bubble');
             if (bubble) {
                 bubble.style.animation = "none";
@@ -51,19 +50,27 @@
             }
 
             // Apply keyword highlight if jumping from Search
-            if (highlightKeyword) {
+            if (searchTerms) {
+                const terms = Array.isArray(searchTerms) ? searchTerms : [searchTerms];
                 const textArea = target.querySelector('.text');
                 if (textArea) {
                     const originalHTML = textArea.innerHTML;
-                    const safeKeyword = escapeRegExp(highlightKeyword);
-                    const regex = new RegExp(`(${safeKeyword})`, 'gi');
                     
-                    // Safe highlighting that only touches text nodes
+                    // Sort terms by length (desc) to avoid partial matches inside longer matches
+                    const sortedTerms = [...new Set(terms)]
+                        .filter(t => t.length > 0)
+                        .sort((a, b) => b.length - a.length);
+                        
+                    if (sortedTerms.length === 0) return;
+
+                    const pattern = sortedTerms.map(t => escapeRegExp(t)).join('|');
+                    const regex = new RegExp(`(${pattern})`, 'gi');
+                    
                     const walkAndHighlight = (node) => {
-                        if (node.nodeType === 3) { // Text Node
+                        if (node.nodeType === 3) {
                             const val = node.nodeValue;
                             if (regex.test(val)) {
-                                regex.lastIndex = 0; // Reset for use in loop
+                                regex.lastIndex = 0; 
                                 const fragment = document.createDocumentFragment();
                                 let lastIdx = 0;
                                 let match;
@@ -79,7 +86,6 @@
                                 node.parentNode.replaceChild(fragment, node);
                             }
                         } else if (node.nodeType === 1 && node.childNodes && node.className !== 'highlight-match') {
-                            // Don't recurse into our own highlights or non-element nodes
                             Array.from(node.childNodes).forEach(walkAndHighlight);
                         }
                     };
@@ -90,7 +96,7 @@
             }
         }
 
-        async function jumpToContext(id, highlightKeyword = null, clickedSearchItem = null) {
+        async function jumpToContext(id, searchTerms = null, clickedSearchItem = null) {
             // 1. Handle sidebars active styling
             if (clickedSearchItem) {
                 document.querySelectorAll('.search-item, .media-grid-item, .media-list-item').forEach(el => el.classList.remove('active'));
@@ -103,7 +109,7 @@
             const existingTarget = document.getElementById(`msg-${id}`);
             if (existingTarget) {
                 // It's already here! Just scroll to it instantly and exit.
-                applyJumpEffects(existingTarget, highlightKeyword);
+                applyJumpEffects(existingTarget, searchTerms);
                 return; 
             }
 
@@ -127,7 +133,7 @@
                 setTimeout(() => {
                     const target = document.getElementById(`msg-${id}`);
                     if (target) { 
-                        applyJumpEffects(target, highlightKeyword);
+                        applyJumpEffects(target, searchTerms);
                     }
                     setTimeout(() => { isFetching = false; }, 500);
                 }, 100);

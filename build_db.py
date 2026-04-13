@@ -50,6 +50,34 @@ def setup_database(db_path):
                   is_pinned INTEGER DEFAULT 0,
                   waveform TEXT, duration INTEGER,
                   reactions TEXT)''')
+    
+    # Create FTS5 virtual table (External Content)
+    # We index text_content, sender, and reactions for high-speed searching
+    c.execute('''CREATE VIRTUAL TABLE IF NOT EXISTS messages_fts USING fts5(
+                 text_content, 
+                 sender, 
+                 reactions,
+                 content='messages',
+                 content_rowid='id',
+                 tokenize='unicode61 remove_diacritics 1'
+                 )''')
+
+    # Triggers to keep FTS index synchronized when the main table is modified
+    c.execute('''CREATE TRIGGER IF NOT EXISTS messages_ai AFTER INSERT ON messages BEGIN
+                 INSERT INTO messages_fts(rowid, text_content, sender, reactions)
+                 VALUES (new.id, new.text_content, new.sender, new.reactions);
+                 END''')
+    c.execute('''CREATE TRIGGER IF NOT EXISTS messages_ad AFTER DELETE ON messages BEGIN
+                 INSERT INTO messages_fts(messages_fts, rowid, text_content, sender, reactions)
+                 VALUES('delete', old.id, old.text_content, old.sender, old.reactions);
+                 END''')
+    c.execute('''CREATE TRIGGER IF NOT EXISTS messages_au AFTER UPDATE ON messages BEGIN
+                 INSERT INTO messages_fts(messages_fts, rowid, text_content, sender, reactions)
+                 VALUES('delete', old.id, old.text_content, old.sender, old.reactions);
+                 INSERT INTO messages_fts(rowid, text_content, sender, reactions)
+                 VALUES (new.id, new.text_content, new.sender, new.reactions);
+                 END''')
+
     c.execute("CREATE INDEX IF NOT EXISTS idx_messages_timestamp ON messages(timestamp)")
     c.execute("CREATE INDEX IF NOT EXISTS idx_messages_sender ON messages(sender)")
     c.execute("CREATE INDEX IF NOT EXISTS idx_messages_media_type ON messages(media_type)")

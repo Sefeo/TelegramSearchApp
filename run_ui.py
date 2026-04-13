@@ -16,6 +16,8 @@ from datetime import datetime
 import calendar as cal_module
 from threading import Timer
 from typing import Any, Optional, Union, Dict, List, Set, Tuple, cast
+import pymorphy3
+from lemminflect import getAllInflections
 
 # Setup paths
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
@@ -58,6 +60,93 @@ _SENDER_CLEAN_RE = re.compile(r'\s+\d{2}\.\d{2}\.\d{4}\s+\d{2}:\d{2}:\d{2}$')
 def clean_sender_name(name):
     # This removes the " DD.MM.YYYY HH:MM:SS" from the end of the string
     return _SENDER_CLEAN_RE.sub('', name)
+
+class SearchEngine:
+    def __init__(self):
+        self.morph_ua = pymorphy3.MorphAnalyzer(lang='uk')
+        self.morph_ru = pymorphy3.MorphAnalyzer(lang='ru')
+        
+        # Content POS tags (expand these)
+        # NPRO (Pronouns) included to support "він/вона/вони" intent expansion
+        self.CONTENT_TAGS = {'NOUN', 'VERB', 'ADJF', 'ADJS', 'COMP', 'INFN', 'PRTF', 'PRTS', 'GRND', 'NPRO'}
+        # Functional POS tags (do NOT expand these)
+        self.FUNCTIONAL_TAGS = {'PREP', 'CONJ', 'PRCL', 'INTJ'}
+
+    def _get_morph_info(self, word):
+        """Analyzes word in both languages and picks the best one based on is_known and score."""
+        word = word.lower() # Ensure lowercase for dictionary lookup
+        ua_parse = self.morph_ua.parse(word)[0]
+        ru_parse = self.morph_ru.parse(word)[0]
+        
+        # Priority logic: 
+        # 1. If only one is known, pick that.
+        # 2. If both known, pick the one with the higher score.
+        # 3. If neither known, pick higher score (likely UA for this project).
+        
+        if ua_parse.is_known and not ru_parse.is_known:
+            return ua_parse, 'ua'
+        if ru_parse.is_known and not ua_parse.is_known:
+            return ru_parse, 'ru'
+        
+        if ua_parse.score >= ru_parse.score:
+            return ua_parse, 'ua'
+        else:
+            return ru_parse, 'ru'
+
+    def expand_query(self, query):
+        if not query: return "", []
+        
+        # Exact Match Hatch: "quoted string"
+        if query.startswith('"') and query.endswith('"'):
+            inner = query[1:-1]
+            return f'"{inner}"', [inner]
+
+        # Tokenize (keeping only alphanumeric and spaces)
+        words = re.findall(r'\b\w+\b', query.lower())
+        if not words: return "", []
+
+        query_parts = []
+        all_highlight_terms = set()
+        
+        for word in words:
+            word = word.lower()
+            expanded_words = set([word])
+            is_en = all(ord(c) < 128 for c in word)
+            
+            if is_en:
+                # English Expansion (All inflections)
+                inflections = getAllInflections(word)
+                for tag in inflections:
+                    expanded_words.update(inflections[tag])
+            else:
+                # UA/RU Morphological Expansion
+                # We analyze ALL parses to be safe against ambiguity
+                parses = self.morph_ua.parse(word) + self.morph_ru.parse(word)
+                
+                for p in parses:
+                    # If this interpretation is a content word, expand it
+                    if p.tag.POS in self.CONTENT_TAGS:
+                        for lex in p.lexeme:
+                            expanded_words.add(lex.word)
+
+            # Filter out terms that are too short (noise) 
+            # Rule: Must be >= 3 chars OR be the original word
+            terms = [t for t in expanded_words if len(t) >= 3 or t == word]
+            all_highlight_terms.update(terms)
+            
+            # Group terms for this word
+            if len(terms) > 1:
+                # Use explicit parentheses for OR groups
+                word_group = "( " + " OR ".join(f'"{t}"' for t in terms) + " )"
+                query_parts.append(word_group)
+            else:
+                query_parts.append(f'"{word}"')
+
+        # Join groups with explicit AND to avoid precedence ambiguity
+        final_query = " AND ".join(query_parts) if len(query_parts) > 1 else query_parts[0]
+        return final_query, list(all_highlight_terms)
+
+_search_engine = SearchEngine()
  
 @app.route('/')
 def home():
@@ -297,44 +386,70 @@ def search():
     start_date = request.args.get('start', '').strip()
     end_date = request.args.get('end', '').strip()
     
-    base_where = "WHERE 1=1"
     params = []
+    highlight_terms = []
+    where_clauses = ["1=1"]
 
+    fts_query = None
     if keyword:
-        base_where += " AND (text_content LIKE ? OR reactions LIKE ?)"
-        params.extend([f"%{keyword}%", f"%{keyword}%"])
+        # 1. Expand query through SearchEngine
+        fts_query, highlight_terms = _search_engine.expand_query(keyword)
+        if fts_query:
+            # Use FTS5 MATCH on the virtual table handle
+            where_clauses.append("f.messages_fts MATCH ?")
+            params.append(fts_query)
+        else:
+            # Fallback if expansion fails to tokens
+            where_clauses.append("(m.text_content LIKE ? OR m.reactions LIKE ?)")
+            params.extend([f"%{keyword}%", f"%{keyword}%"])
+            highlight_terms = [keyword]
     
     if sender_param:
         senders = [s.strip() for s in sender_param.split(',')]
         sender_clauses = []
         for s in senders:
-            # Match EXACT name OR name followed by a space (to catch the ones with timestamps)
-            sender_clauses.append("(sender = ? OR sender LIKE ?)")
+            sender_clauses.append("(m.sender = ? OR m.sender LIKE ?)")
             params.extend([s, f"{s} %"])
-        
-        base_where += " AND (" + " OR ".join(sender_clauses) + ")"
+        where_clauses.append("(" + " OR ".join(sender_clauses) + ")")
 
     if start_date:
-        base_where += " AND timestamp >= ?"
+        where_clauses.append("m.timestamp >= ?")
         params.append(start_date + " 00:00:00")
     if end_date:
-        base_where += " AND timestamp <= ?"
+        where_clauses.append("m.timestamp <= ?")
         params.append(end_date + " 23:59:59")
 
-    query = f'''
-        SELECT m.*, 
-               r.sender as reply_sender, 
-               r.text_content as reply_text, 
-               r.media_type as reply_media_type, 
-               r.media_path as reply_media_path 
-        FROM (
-            SELECT * FROM messages 
-            {base_where}
-            ORDER BY timestamp DESC LIMIT 200
-        ) m 
-        LEFT JOIN messages r ON m.reply_to_id = r.id
-        ORDER BY m.timestamp DESC
-    '''
+    where_str = "WHERE " + " AND ".join(where_clauses)
+
+    if keyword and fts_query:
+        # FTS5 search with Ranking
+        query = f'''
+            SELECT m.*, 
+                   r.sender as reply_sender, 
+                   r.text_content as reply_text, 
+                   r.media_type as reply_media_type, 
+                   r.media_path as reply_media_path 
+            FROM messages m
+            JOIN messages_fts f ON m.id = f.rowid
+            LEFT JOIN messages r ON m.reply_to_id = r.id
+            {where_str}
+            ORDER BY m.timestamp DESC 
+            LIMIT 200
+        '''
+    else:
+        # Standard search
+        query = f'''
+            SELECT m.*, 
+                   r.sender as reply_sender, 
+                   r.text_content as reply_text, 
+                   r.media_type as reply_media_type, 
+                   r.media_path as reply_media_path 
+            FROM messages m
+            LEFT JOIN messages r ON m.reply_to_id = r.id
+            {where_str}
+            ORDER BY m.timestamp DESC 
+            LIMIT 200
+        '''
 
     try:
         conn = sqlite3.connect(DB_NAME)
@@ -343,8 +458,13 @@ def search():
         c.execute(query, params)
         results = c.fetchall()
         conn.close()
-        return jsonify(results)
+        
+        return jsonify({
+            "results": results,
+            "terms": highlight_terms
+        })
     except Exception as e:
+        traceback.print_exc()
         return jsonify({"error": str(e)}), 500
         
 @app.route('/api/open_file', methods=['POST'])
@@ -523,9 +643,40 @@ def upgrade_db():
                 c.executemany("INSERT OR IGNORE INTO media_sizes_cache (media_path, size) VALUES (?, ?)", inserts)
         
         print("[DB] Database ready: All performance indexes and cache tables ensured.")
-            
     except Exception as e:
         print(f"[DB] Index/Cache restoration error: {e}")
+
+    try:
+        # Check if FTS5 table exists
+        c.execute("SELECT name FROM sqlite_master WHERE type='table' AND name='messages_fts'")
+        if not c.fetchone():
+            print("[DB] Creating FTS5 index (this may take a moment)...")
+            c.execute('''CREATE VIRTUAL TABLE messages_fts USING fts5(
+                         text_content, sender, reactions,
+                         content='messages', content_rowid='id',
+                         tokenize='unicode61 remove_diacritics 1'
+                         )''')
+            c.execute("INSERT INTO messages_fts(rowid, text_content, sender, reactions) SELECT id, text_content, sender, reactions FROM messages")
+            
+            # Add Synchronizing Triggers
+            c.execute('''CREATE TRIGGER IF NOT EXISTS messages_ai AFTER INSERT ON messages BEGIN
+                         INSERT INTO messages_fts(rowid, text_content, sender, reactions)
+                         VALUES (new.id, new.text_content, new.sender, new.reactions);
+                         END''')
+            c.execute('''CREATE TRIGGER IF NOT EXISTS messages_ad AFTER DELETE ON messages BEGIN
+                         INSERT INTO messages_fts(messages_fts, rowid, text_content, sender, reactions)
+                         VALUES('delete', old.id, old.text_content, old.sender, old.reactions);
+                         END''')
+            c.execute('''CREATE TRIGGER IF NOT EXISTS messages_au AFTER UPDATE ON messages BEGIN
+                         INSERT INTO messages_fts(messages_fts, rowid, text_content, sender, reactions)
+                         VALUES('delete', old.id, old.text_content, old.sender, old.reactions);
+                         INSERT INTO messages_fts(rowid, text_content, sender, reactions)
+                         VALUES (new.id, new.text_content, new.sender, new.reactions);
+                         END''')
+            print("[DB] FTS5 index created and populated.")
+            
+    except Exception as e:
+        print(f"[DB] FTS5 upgrade error: {e}")
         
     conn.commit()
     conn.close()
