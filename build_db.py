@@ -137,7 +137,18 @@ def parse_single_file(task):
 
                     text_content = ""
                     text_node = msg.css_first('div.text')
-                    if text_node: text_content = get_inner_html(text_node).strip()
+                    if text_node: 
+                        text_content = get_inner_html(text_node).strip()
+                        # Auto-resolve relative paths inside inline links (like custom emojis)
+                        if 'href="stickers/' in text_content or 'href="video_files/' in text_content or 'href="animations/' in text_content:
+                            import re
+                            def repl(m):
+                                p1, p2, p3 = m.group(1), m.group(2), m.group(3)
+                                if p2.startswith('http') or ':\\' in p2 or ':/' in p2: return m.group(0)
+                                abs_path = os.path.abspath(os.path.join(folder_path, p2))
+                                return f'<a{p1}href="{abs_path}"{p3}>'
+                            text_content = re.sub(r'<a([^>]*)href=["\']([^"\']+)["\']([^>]*)>', repl, text_content)
+
 
                     media_path = None
                     media_type = None
@@ -201,7 +212,25 @@ def parse_single_file(task):
                             elif href.startswith('video_files/') or 'media_video' in classes or 'animated_wrap' in classes:
                                 is_anim = ("Animation" in title_text or "Animation" in status_text or "GIF" in link.text(strip=True) or href.startswith(('animated_stickers/', 'animations/')) or any(kw in href.lower() for kw in ['sticker', 'anim', 'result.mp4']) or 'animated_wrap' in classes or link.css_first('div.gif_play') is not None)
                                 media_type = 'gif' if is_anim and not href.startswith('round_video_messages/') else 'video'
+                            elif href.startswith('stickers/'): media_type = 'sticker'
+                            elif href.startswith('animations/') or href.startswith('animated_stickers/'): media_type = 'gif'
+                            
                             if media_type:
+                                # Prevent inline text emojis from becoming large attachments unless they are standalone
+                                is_inline = False
+                                p = link.parent
+                                while p and p.tag != 'div':
+                                    if p.attributes.get('class') == 'text': is_inline = True; break
+                                    p = p.parent
+                                if p and p.attributes.get('class') == 'text': is_inline = True
+                                
+                                if is_inline:
+                                    # Very simple stripped check to see if the block holds only a few chars
+                                    plain_text = re.sub(r'<[^>]+>', '', text_content).strip()
+                                    if len(plain_text) > 5:
+                                        media_type = None
+                                        continue
+                                
                                 media_path = os.path.abspath(os.path.join(folder_path, href))
                                 break 
                     

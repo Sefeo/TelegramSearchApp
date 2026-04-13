@@ -100,7 +100,7 @@
                 
                 // PREPARE CONTENT
                 let mediaHtml = '';
-				let textToRender = formatMessageText(msg.text_content);
+				let textToRender = formatMessageText(msg.text_content, msg.media_path);
                 let isSpoilerMedia = textToRender.trim() === 'spoiler image';
                 if (isSpoilerMedia) textToRender = ''; // Hide text if it's just a marker
 				
@@ -245,7 +245,7 @@
                 // --- REPLY BLOCK GENERATION ---
                 let replyHtml = '';
                 if (msg.reply_to_id) {
-                    let rText = formatMessageText(msg.reply_text) || "";
+                    let rText = formatMessageText(msg.reply_text, null) || "";
                     let rMediaLabel = "";
                     let rThumbHtml = "";
 
