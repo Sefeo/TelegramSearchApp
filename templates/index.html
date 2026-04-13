@@ -27,6 +27,13 @@
     <!-- Right-Click Context Menu -->
     <div id="context-menu">
         <div class="menu-item" id="menu-select-msg" onclick="startSelection()">☑ Select</div>
+        <div class="menu-item has-flyout" id="menu-reactions" style="display: none;">
+            <div style="display: flex; align-items: center; justify-content: space-between; width: 100%;">
+                <div id="menu-reactions-summary" style="display: flex; align-items: center; gap: 4px;"></div>
+                <span style="font-size: 10px; margin-left: 10px; color: var(--text-muted);">▶</span>
+            </div>
+            <div id="menu-reactions-hover" class="popup-hover-menu"></div>
+        </div>
         <div class="menu-item" id="menu-select-until" onclick="selectUntilHere()" style="display: none;">🔽 Select until
             this message</div>
         <div class="menu-item" id="menu-jump-dialogue" onclick="jumpToRightClicked()"

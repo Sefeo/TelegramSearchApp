@@ -22,6 +22,62 @@
                 // 1. "Select" (Only show if clicked inside the chat, not media menu)
                 toggleItem('menu-select-msg', !!msgRow);
 
+                // --- REACTIONS LOGIC ---
+                let showReactions = false;
+                if (msg && msg.reactions) {
+                    try {
+                        let parsed = JSON.parse(msg.reactions);
+                        let totalCount = 0;
+                        let usersWithEmojis = []; 
+                        
+                        parsed.forEach(r => {
+                            totalCount += r.count || 0;
+                            if (r.users && r.users.length > 0) {
+                                r.users.forEach(u => {
+                                    usersWithEmojis.push({ emoji: r.emoji, path: r.path, user: u });
+                                });
+                            }
+                        });
+
+                        if (usersWithEmojis.length > 0) {
+                            showReactions = true;
+                            // populate summary
+                            let summaryHtml = `<span>${totalCount}</span> `;
+                            summaryHtml += `<div class="reaction-avatars" style="margin-left: 5px;">`;
+                            usersWithEmojis.slice(0, 3).forEach(u => {
+                                summaryHtml += `<img class="reaction-avatar" src="/avatar/${encodeURIComponent(u.user)}">`;
+                            });
+                            summaryHtml += `</div>`;
+                            document.getElementById('menu-reactions-summary').innerHTML = 'Reactions ' + summaryHtml;
+
+                            // populate flyout
+                            let flyoutHtml = '';
+                            parsed.forEach(r => {
+                                if (r.users && r.users.length > 0) {
+                                    flyoutHtml += `<div class="reaction-flyout-group">`;
+                                    flyoutHtml += `<div class="reaction-flyout-header">`;
+                                    if (r.path) {
+                                        flyoutHtml += `<video class="reaction-video" style="width:14px; height:14px; margin-right:4px;" src="/media?path=${encodeURIComponent(r.path)}" autoplay loop muted playsinline></video> ${r.count} reactions`;
+                                    } else {
+                                        flyoutHtml += `<span style="font-size:14px; margin-right:4px;">${r.emoji}</span> ${r.count} reactions`;
+                                    }
+                                    flyoutHtml += `</div>`;
+                                    r.users.forEach(u => {
+                                        flyoutHtml += `<div class="reaction-flyout-user">`;
+                                        flyoutHtml += `<img class="reaction-avatar" src="/avatar/${encodeURIComponent(u)}"> ${u}`;
+                                        flyoutHtml += `</div>`;
+                                    });
+                                    flyoutHtml += `</div>`;
+                                }
+                            });
+                            document.getElementById('menu-reactions-hover').innerHTML = flyoutHtml;
+                        }
+                    } catch(e) { console.error('Error parsing reactions:', e) }
+                }
+                const menuReactionsEl = document.getElementById('menu-reactions');
+                if (menuReactionsEl) menuReactionsEl.style.display = showReactions ? 'flex' : 'none';
+
+
                 // 2. "See in dialogue" (Only show if clicked from media menu)
                 toggleItem('menu-jump-dialogue', !!mediaItem);
 

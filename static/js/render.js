@@ -303,6 +303,40 @@
                 const isFrameless = (msg.media_type === 'sticker' || msg.media_type === 'gif') && !textToRender && !msg.reply_to_id;
                 const bubbleClass = isFrameless ? "bubble frameless" : "bubble";
 
+                // --- REACTIONS LOGIC ---
+                let reactionsHtml = '';
+                if (msg.reactions) {
+                    try {
+                        const rList = JSON.parse(msg.reactions).slice(0, 6);
+                        if (rList.length > 0) {
+                            reactionsHtml += `<div class="reactions-container">`;
+                            rList.forEach(r => {
+                                let reactionContent = '';
+                                if (r.path) {
+                                    const safePath = encodeURIComponent(r.path);
+                                    reactionContent = `<video class="reaction-video" src="/media?path=${safePath}" autoplay loop muted playsinline></video>`;
+                                } else {
+                                    reactionContent = `<span class="reaction-emoji">${r.emoji}</span>`;
+                                }
+
+                                let userAvatarsHtml = '';
+                                if (r.users && r.users.length > 0 && r.count <= 3) {
+                                    userAvatarsHtml = `<div class="reaction-avatars">`;
+                                    r.users.slice(0, 3).forEach(u => {
+                                        userAvatarsHtml += `<img class="reaction-avatar" src="/avatar/${encodeURIComponent(u)}">`;
+                                    });
+                                    userAvatarsHtml += `</div>`;
+                                } else {
+                                    userAvatarsHtml = `<span class="reaction-count">${r.count}</span>`;
+                                }
+
+                                reactionsHtml += `<div class="reaction-badge">${reactionContent}${userAvatarsHtml}</div>`;
+                            });
+                            reactionsHtml += `</div>`;
+                        }
+                    } catch(e) {}
+                }
+
                 html += `
                     <div class="msg-row" id="msg-${msg.id}" data-date="${dateOnly}" data-sender="${msg.sender}" data-timestamp="${msg.timestamp}">
                         ${showAvatar ? `<img class="avatar" src="${avatarUrl}">` : `<div style="width: 54px;"></div>`}
@@ -313,6 +347,7 @@
                             ${fwdHtml}
                             ${mediaHtml}
                             ${textToRender ? `<div class="text">${textToRender} <span class="time">${timeStr}</span></div>` : ''}
+                            ${reactionsHtml}
                         </div>
                     </div>`;
             });
@@ -341,6 +376,10 @@
                     const id = parseInt(canvas.id.replace('vp-canvas-', ''));
                     const msg = messageDataStore[id];
                     drawWaveform(canvas, id, 0, msg ? msg.waveform : null); 
+                });
+                chat.querySelectorAll('.reaction-video:not(.observed)').forEach(vid => {
+                    vid.classList.add('observed');
+                    reactionVideoObserver.observe(vid);
                 });
                 syncPlayingUI();
                 updatePinnedBar(); // Ensure bar updates when content loads

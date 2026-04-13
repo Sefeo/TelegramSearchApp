@@ -48,7 +48,8 @@ def setup_database(db_path):
                   tg_id TEXT, reply_to_tg_id TEXT, reply_to_id INTEGER,
                   forwarded_from TEXT, forwarded_date TEXT,
                   is_pinned INTEGER DEFAULT 0,
-                  waveform TEXT, duration INTEGER)''')
+                  waveform TEXT, duration INTEGER,
+                  reactions TEXT)''')
     c.execute("CREATE INDEX IF NOT EXISTS idx_messages_timestamp ON messages(timestamp)")
     c.execute("CREATE INDEX IF NOT EXISTS idx_messages_sender ON messages(sender)")
     c.execute("CREATE INDEX IF NOT EXISTS idx_messages_media_type ON messages(media_type)")
@@ -203,7 +204,42 @@ def parse_single_file(task):
                             if media_type:
                                 media_path = os.path.abspath(os.path.join(folder_path, href))
                                 break 
-                    normal_msgs_batch.append((folder_name, file_name, current_sender, msg_date, text_content, media_path, media_type, tg_id, reply_to_tg_id, forwarded_from, forwarded_date, duration))
+                    
+                    reactions_json = None
+                    reactions_node = msg.css_first('span.reactions')
+                    if reactions_node:
+                        reactions = []
+                        for reaction in reactions_node.css('span.reaction'):
+                            emoji_node = reaction.css_first('span.emoji')
+                            emoji_text = ""
+                            emoji_path = None
+                            
+                            if emoji_node:
+                                a_tag = emoji_node.css_first('a')
+                                if a_tag and 'href' in a_tag.attributes:
+                                    emoji_path = os.path.abspath(os.path.join(folder_path, a_tag.attributes['href']))
+                                emoji_text = emoji_node.text(strip=True)
+                                
+                            users = []
+                            userpics_node = reaction.css_first('span.userpics')
+                            if userpics_node:
+                                for initial_node in userpics_node.css('div.initials'):
+                                    t = initial_node.attributes.get('title')
+                                    if t: users.append(t)
+                                    
+                            count_node = reaction.css_first('span.count')
+                            count = len(users)
+                            if count_node:
+                                try: count = int(count_node.text(strip=True))
+                                except: pass
+                                
+                            if count == 0 and not users: count = 1
+                            reactions.append({"emoji": emoji_text, "path": emoji_path, "count": count, "users": users})
+                        
+                        if reactions:
+                            reactions_json = json.dumps(reactions)
+
+                    normal_msgs_batch.append((folder_name, file_name, current_sender, msg_date, text_content, media_path, media_type, tg_id, reply_to_tg_id, forwarded_from, forwarded_date, duration, reactions_json))
 
                 elif 'service' in classes:
                     body_node = msg.css_first('div.body.details')
@@ -258,7 +294,7 @@ def parse_folder(conn, folder_path, folder_name):
                 r = [list(m) for m in norm]
                 for idx, res in zip(needs_dur, df): r[idx][11] = res.result()
                 norm = [tuple(m) for m in r]
-            if norm: c.executemany("INSERT INTO messages (source_folder, file_name, sender, timestamp, text_content, media_path, media_type, tg_id, reply_to_tg_id, forwarded_from, forwarded_date, duration) VALUES (?,?,?,?,?,?,?,?,?,?,?,?)", norm)
+            if norm: c.executemany("INSERT INTO messages (source_folder, file_name, sender, timestamp, text_content, media_path, media_type, tg_id, reply_to_tg_id, forwarded_from, forwarded_date, duration, reactions) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)", norm)
             if sys: c.executemany("INSERT INTO messages (source_folder, file_name, sender, timestamp, text_content, media_type, forwarded_from) VALUES (?,?,?,?,?,?,?)", sys)
             total += len(norm) + len(sys); print(f"    √ {fname} ({len(norm)+len(sys)})")
     c.execute("UPDATE messages SET reply_to_id = (SELECT id FROM messages m2 WHERE m2.tg_id = messages.reply_to_tg_id) WHERE source_folder = ? AND reply_to_tg_id IS NOT NULL AND reply_to_id IS NULL", (folder_name,))

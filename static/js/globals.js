@@ -65,3 +65,13 @@ const chat = document.getElementById('chat');
 
 		let mediaState = { type: 'photo', oldestId: null, isFetching: false, allLoaded: false, currentMonth: "" };
 
+        const reactionVideoObserver = new IntersectionObserver((entries) => {
+            entries.forEach(entry => {
+                if (!entry.isIntersecting) {
+                    entry.target.pause();
+                } else {
+                    entry.target.play().catch(e => {}); // Ignore interaction requirement errors
+                }
+            });
+        }, { root: chat, rootMargin: '50px 0px' });
+

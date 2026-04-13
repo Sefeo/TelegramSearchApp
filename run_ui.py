@@ -301,8 +301,8 @@ def search():
     params = []
 
     if keyword:
-        base_where += " AND text_content LIKE ?"
-        params.append(f"%{keyword}%")
+        base_where += " AND (text_content LIKE ? OR reactions LIKE ?)"
+        params.extend([f"%{keyword}%", f"%{keyword}%"])
     
     if sender_param:
         senders = [s.strip() for s in sender_param.split(',')]
@@ -480,6 +480,12 @@ def upgrade_db():
     try:
         c.execute("ALTER TABLE messages ADD COLUMN duration INTEGER")
         print("[DB] Upgraded database: Added 'duration' column.")
+    except Exception:
+        pass # Column already exists
+        
+    try:
+        c.execute("ALTER TABLE messages ADD COLUMN reactions TEXT")
+        print("[DB] Upgraded database: Added 'reactions' column.")
     except Exception:
         pass # Column already exists
         

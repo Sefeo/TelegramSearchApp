@@ -595,4 +595,59 @@
             top: 50%; left: 50%; transform: translate(-50%, -50%);
         }
 
+        /* --- REACTIONS --- */
+        .reactions-container {
+            display: flex; flex-wrap: wrap; gap: 4px; margin-top: 6px;
+        }
+        .reaction-badge {
+            background: rgba(82, 136, 193, 0.15);
+            border: 1px solid rgba(82, 136, 193, 0.3);
+            border-radius: 12px; padding: 2px 6px;
+            display: inline-flex; align-items: center; gap: 4px;
+            cursor: pointer; transition: 0.2s;
+        }
+        .reaction-badge:hover {
+            background: rgba(82, 136, 193, 0.3);
+        }
+        .reaction-emoji {
+            font-size: 14px;
+        }
+        .reaction-video {
+            width: 20px; height: 20px; border-radius: 50%; object-fit: cover;
+        }
+        .reaction-count {
+            font-size: 11px; font-weight: bold; color: var(--accent);
+        }
+        .reaction-avatars {
+            display: flex; margin-left: 2px;
+        }
+        .reaction-avatar {
+            width: 16px; height: 16px; border-radius: 50%; object-fit: cover;
+            border: 1px solid var(--message-other); margin-left: -6px;
+        }
+        .reaction-avatar:first-child { margin-left: 0; }
+
+        /* Reactions Menu Flyout */
+        .menu-item.has-flyout:hover .popup-hover-menu {
+            display: block; opacity: 1; pointer-events: auto;
+        }
+        .popup-hover-menu {
+            position: absolute; left: 100%; top: 0; margin-left: 2px;
+            display: none; opacity: 0; pointer-events: none;
+            background: #242f3d; padding: 6px; border-radius: 6px;
+            box-shadow: 0 4px 10px rgba(0,0,0,0.5); border: 1px solid #3a4b5c;
+            min-width: 150px; z-index: 1010; transition: opacity 0.2s;
+        }
+        .reaction-flyout-group { margin-bottom: 6px; }
+        .reaction-flyout-group:last-child { margin-bottom: 0; }
+        .reaction-flyout-header {
+            font-size: 12px; color: var(--text-muted); margin-bottom: 4px;
+            display: flex; align-items: center; gap: 4px; border-bottom: 1px solid rgba(255,255,255,0.05); padding-bottom: 2px;
+        }
+        .reaction-flyout-user {
+            display: flex; align-items: center; gap: 6px; font-size: 13px; color: white; padding: 2px 4px;
+        }
+        .reaction-flyout-user .reaction-avatar { width: 18px; height: 18px; margin-left: 0; }
+
+
 
