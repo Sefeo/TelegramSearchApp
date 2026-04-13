@@ -18,17 +18,14 @@
         :root { --player-offset: 0px; }
         body.player-open { --player-offset: 50px; }
 
-		/* Date Divider — Sticky Telegram-style */
+		/* Date Divider — Static in-flow "Fixed" pills */
         .date-divider {
             text-align: center;
             padding: 10px 0;
-            position: sticky;
-            top: calc(10px + var(--player-offset, 0px));
             z-index: 50;
             display: flex;
             justify-content: center;
             pointer-events: none;
-            transition: top 0.3s ease;
         }
         .date-divider span {
             background-color: rgba(24, 37, 51, 0.5);
@@ -40,9 +37,26 @@
             font-weight: 600;
             pointer-events: auto;
         }
-        @keyframes dateDividerFadeIn {
-            from { opacity: 0; transform: translateY(-4px); }
-            to   { opacity: 1; transform: translateY(0); }
+
+        /* Floating Date Pill — JS-positioned overlay */
+        #floating-date {
+            position: fixed;
+            z-index: 55;
+            pointer-events: none;
+            display: none;
+            justify-content: center;
+            left: 0; right: 0;
+            transition: opacity 0.4s ease;
+        }
+        #floating-date span {
+            background-color: rgba(24, 37, 51, 0.5);
+            backdrop-filter: blur(4px);
+            padding: 4px 12px;
+            border-radius: 12px;
+            font-size: 13px;
+            color: white;
+            font-weight: 600;
+            pointer-events: auto;
         }
 		
 		/* Pinned Messages Bar */

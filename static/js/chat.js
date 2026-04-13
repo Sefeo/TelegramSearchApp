@@ -14,26 +14,9 @@
             }
         }
 
-        // --- Floating date pill detection ---
-        function getFloatingSpans() {
-            const chatRect = chat.getBoundingClientRect();
-            const cs = window.getComputedStyle(chat);
-            const paddingTop = parseFloat(cs.paddingTop) || 0;
-            const stickyTop = document.body.classList.contains('player-open') ? 60 : 10;
-            // Sticky elements stick to the content box, so we must add the parent's padding
-            const stuckY = chatRect.top + paddingTop + stickyTop;
-
-            let results = [];
-            chat.querySelectorAll('.date-divider').forEach(d => {
-                const top = d.getBoundingClientRect().top;
-                // If it is at the sticky ceiling (within 5px rounding tolerance)
-                if (Math.abs(top - stuckY) < 5) {
-                    const span = d.querySelector('span');
-                    if (span) results.push(span);
-                }
-            });
-            return results;
-        }
+        // --- Floating date pill (JS-controlled overlay) ---
+        let floatingPill = null;
+        let floatingPillSpan = null;
 
         async function loadOlder() {
             if (isFetching || allOldLoaded || !oldestMsgId) return;
@@ -158,6 +141,73 @@
 
         function jumpToBottom() { loadInitial(); document.getElementById('btn-down').style.display = 'none'; }
 
+        function updateFloatingPill() {
+            // Lazy init: find or create the floating pill element
+            if (!floatingPill) {
+                floatingPill = document.getElementById('floating-date');
+                if (!floatingPill) {
+                    // Create it dynamically if missing (e.g. cached HTML)
+                    floatingPill = document.createElement('div');
+                    floatingPill.id = 'floating-date';
+                    floatingPill.innerHTML = '<span></span>';
+                    chat.parentNode.insertBefore(floatingPill, chat);
+                }
+                // Apply essential styles inline (cache-proof)
+                floatingPill.style.cssText = 'position:fixed;z-index:55;pointer-events:none;display:none;justify-content:center;left:0;right:0;transition:opacity 0.4s ease;';
+                floatingPillSpan = floatingPill.querySelector('span');
+                floatingPillSpan.style.cssText = 'background-color:rgba(24,37,51,0.5);backdrop-filter:blur(4px);padding:4px 12px;border-radius:12px;font-size:13px;color:white;font-weight:600;pointer-events:auto;';
+            }
+
+            const chatRect = chat.getBoundingClientRect();
+            const stickyTop = document.body.classList.contains('player-open') ? 60 : 10;
+            const ceilY = chatRect.top + stickyTop;   // viewport Y where pill sits
+
+            const dividers = Array.from(chat.querySelectorAll('.date-divider'));
+            if (dividers.length === 0) { floatingPill.style.display = 'none'; return; }
+
+            // Find the "active" divider: the LAST one whose visible span has fully
+            // scrolled above ceilY, so the fixed pill is truly gone before floating appears.
+            let activeIdx = -1;
+            for (let i = 0; i < dividers.length; i++) {
+                const span = dividers[i].querySelector('span');
+                const bottom = span ? span.getBoundingClientRect().bottom : dividers[i].getBoundingClientRect().bottom;
+                if (bottom < ceilY) activeIdx = i;
+                else break;  // dividers are in DOM order (top-to-bottom)
+            }
+
+            if (activeIdx === -1) {
+                // No divider has fully scrolled past → hide overlay
+                floatingPill.style.display = 'none';
+                return;
+            }
+
+            const activeDivider = dividers[activeIdx];
+            const nextDivider = dividers[activeIdx + 1] || null;
+
+            // Set the text
+            const dateText = activeDivider.querySelector('span')?.textContent || '';
+            floatingPillSpan.textContent = dateText;
+            floatingPill.style.display = 'flex';
+            floatingPill.style.opacity = '1';
+
+            // Calculate the "floor": the pill must not go below the last message of its day.
+            // The floor is the top of the next date-divider minus the pill's own height.
+            let pillY = ceilY;
+            if (nextDivider) {
+                const nextTop = nextDivider.getBoundingClientRect().top;
+                const pillH = floatingPill.offsetHeight;
+                const floorY = nextTop - pillH;
+                pillY = Math.min(ceilY, floorY);
+            }
+
+            floatingPill.style.top = pillY + 'px';
+
+            // If the pill is pushed above the viewport top (scrolled past the entire day), hide it
+            if (pillY + floatingPill.offsetHeight < chatRect.top) {
+                floatingPill.style.display = 'none';
+            }
+        }
+
         chat.addEventListener('scroll', () => {
             // Increased threshold from 150 to 1500 to load messages much earlier
             if (chat.scrollTop < 1500) loadOlder();
@@ -166,29 +216,14 @@
             // Calculate if we should hide the down arrow
             document.getElementById('btn-down').style.display = (allNewLoaded && chat.scrollHeight - chat.scrollTop <= chat.clientHeight + 100) ? 'none' : 'flex';
             
-            // --- Scroll-idle auto-fade for the floating date pill ---
-            const floatingSpans = getFloatingSpans();
-            // The one the user should actually see is the last one in the DOM order
-            const topFloatingSpan = floatingSpans.length > 0 ? floatingSpans[floatingSpans.length - 1] : null;
+            // --- Update floating date pill ---
+            updateFloatingPill();
 
-            // Restore pills, but INSTANTLY hide overlapped floating ones
-            // This prevents anti-aliased text edges from stacking and looking "torn"
-            chat.querySelectorAll('.date-divider span').forEach(s => {
-                if (floatingSpans.includes(s) && s !== topFloatingSpan) {
-                    s.style.transition = 'none';
-                    s.style.opacity = '0';
-                } else {
-                    s.style.transition = 'opacity 0.3s ease';
-                    s.style.opacity = '1';
-                    s.style.display = '';
-                }
-            });
-
+            // --- Scroll-idle auto-fade ---
             clearTimeout(chat._scrollIdleTimer);
             chat._scrollIdleTimer = setTimeout(() => {
-                if (topFloatingSpan) {
-                    topFloatingSpan.style.transition = 'opacity 0.4s ease';
-                    topFloatingSpan.style.opacity = '0';
+                if (floatingPill && floatingPill.style.display === 'flex') {
+                    floatingPill.style.opacity = '0';
                 }
             }, 1000);
 
